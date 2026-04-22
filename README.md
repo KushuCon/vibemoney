@@ -1,12 +1,12 @@
 # 💸 VibeWallet
 
-Aesthetic expense tracker for Gen Z India. Connect Gmail → auto-sync bank transactions → get your monthly vibe score powered by Kimi K2 AI.
+Aesthetic expense tracker for Gen Z India. Connect Gmail → auto-sync bank transactions → get your monthly vibe score powered by AI.
 
 ## What It Does
 
 - **Gmail Sync** — reads transaction alert emails from Indian banks (HDFC, SBI, ICICI, Axis, Kotak, GPay, PhonePe, Paytm, Amazon Pay, CRED)
 - **Auto Categorization** — tags spends into vibe categories like Midnight Cravings, Retail Therapy, Adulting Pain
-- **Monthly Vibe Report** — AI-generated spending personality using NVIDIA NIM (Kimi K2 Instruct)
+- **Monthly Vibe Report** — AI-generated spending personality
 - **Budget Alerts** — set monthly limit, get warned at 80% and 100%
 - **Bank Balance** — auto-detected from HDFC balance alert emails with last updated timestamp
 - **Net Cash Flow + Savings Rate** — calculated from your credits vs debits
@@ -75,11 +75,11 @@ npm run dev
 
 ---
 
-### 3. NVIDIA NIM (AI Vibe Reports)
+### 3. AI Provider (Vibe Reports)
 
-1. Get a free API key at [build.nvidia.com](https://build.nvidia.com)
+1. Get an API key from your AI provider
 2. Add to `.env.local`
-3. Model used: `moonshotai/kimi-k2-instruct` (set via `NVIDIA_MODEL` env var)
+3. Model used: `moonshotai/kimi-k2-instruct`
 
 ---
 
@@ -94,9 +94,9 @@ npm run dev
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase → Settings → API |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase → Settings → API |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Settings → API |
-| `NVIDIA_API_KEY` | build.nvidia.com → API Keys |
-| `NVIDIA_BASE_URL` | `https://integrate.api.nvidia.com/v1` |
-| `NVIDIA_MODEL` | `moonshotai/kimi-k2-instruct` |
+| `NVIDIA_API_KEY` | Your AI provider API key |
+| `NVIDIA_BASE_URL` | Your AI provider base URL |
+| `NVIDIA_MODEL` | AI model name |
 
 ---
 
@@ -133,7 +133,7 @@ npm run dev
 | Database | Supabase (PostgreSQL) |
 | Styling | Tailwind CSS + shadcn/ui |
 | Charts | Recharts |
-| AI | NVIDIA NIM — Kimi K2 Instruct |
+| AI | Provider-configured model |
 | Gmail | Google APIs Node.js client |
 | PDF Export | jsPDF |
 
@@ -156,7 +156,7 @@ app/
 lib/
   gmail-parser.ts           # Regex patterns per bank + balance parser
   vibe-categories.ts        # Category definitions
-  nvidia.ts                 # NVIDIA NIM AI calls
+   nvidia.ts                 # AI client calls
   supabase.ts               # Supabase client
 
 components/

@@ -1,12 +1,12 @@
 import OpenAI from "openai";
 
-// NVIDIA NIM uses OpenAI-compatible API — just change the base URL!
+// AI provider uses an OpenAI-compatible API.
 const nvidia = new OpenAI({
   apiKey: process.env.NVIDIA_API_KEY!,
   baseURL: process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1",
 });
 
-const MODEL = "moonshotai/kimi-k2-instruct";
+const MODEL = process.env.NVIDIA_MODEL || "moonshotai/kimi-k2-instruct";
 
 /**
  * Categorize a transaction merchant using AI
@@ -52,7 +52,7 @@ Return ONLY the category-id, nothing else.`,
 
     return validCategories.includes(result || "") ? result! : "miscellaneous";
   } catch (error) {
-    console.error("NVIDIA AI categorization error:", error);
+    console.error("AI categorization error:", error);
     return "miscellaneous";
   }
 }
@@ -115,7 +115,7 @@ Generate a fun Gen Z spending personality report. Return JSON only:
       emoji: parsed.emoji || "💸",
     };
   } catch (error) {
-    console.error("NVIDIA AI personality error:", error);
+    console.error("AI personality error:", error);
     return {
       title: "Mystery Spender",
       subtitle: "the AI gave up",

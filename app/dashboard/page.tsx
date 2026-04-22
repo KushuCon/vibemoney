@@ -166,7 +166,7 @@ export default function DashboardPage() {
         setShowWrapped(true);
       }
     } catch {
-      setWrappedError("Failed to generate report. Check your NVIDIA API key.");
+      setWrappedError("Failed to generate report. Check your AI API key.");
     } finally {
       setGeneratingWrapped(false);
     }

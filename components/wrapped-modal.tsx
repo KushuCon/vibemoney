@@ -134,7 +134,7 @@ export function WrappedModal({ data, onClose }: { data: WrappedData; onClose: ()
 
           {/* Footer */}
           <div className="px-5 pb-4 text-center">
-            <span className="text-white/20 text-[10px]">vibewallet.app · Powered by NVIDIA NIM</span>
+            <span className="text-white/20 text-[10px]">vibewallet.app · Powered by AI</span>
           </div>
         </div>
 

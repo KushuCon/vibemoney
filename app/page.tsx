@@ -70,7 +70,7 @@ export default function LandingPage() {
         </div>
       </main>
       <footer className="relative z-10 py-6 text-center text-xs text-muted-foreground border-t border-border/50">
-        Built for Gen Z India · Powered by NVIDIA NIM AI
+        Built for Gen Z India · Powered by AI
       </footer>
     </div>
   );
