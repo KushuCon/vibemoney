@@ -89,9 +89,8 @@ export const BANK_SENDERS = [
 // Gmail search query to find transaction emails
 export function buildGmailQuery(daysBack = 90): string {
   const fromQuery = BANK_SENDERS.map((s) => `from:${s}`).join(" OR ");
-  const subjectQuery =
-    "subject:(debited OR credited OR transaction OR payment OR spent OR UPI)";
-  return `(${fromQuery}) ${subjectQuery} newer_than:${daysBack}d`;
+  const keywordsQuery = "(debited OR credited OR transaction OR payment OR spent OR UPI OR balance)";
+  return `(${fromQuery}) ${keywordsQuery} newer_than:${daysBack}d`;
 }
 
 // ─── Regex patterns per bank ──────────────────────────────────────────────────

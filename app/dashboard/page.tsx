@@ -11,7 +11,7 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   RefreshCw, LogOut, Sparkles, TrendingDown, TrendingUp,
-  ArrowDownRight, ArrowUpRight, Calendar
+  ArrowDownRight, ArrowUpLeft, Calendar
 } from "lucide-react";
 import { VIBE_CATEGORIES } from "@/lib/vibe-categories";
 import { WrappedModal } from "@/components/wrapped-modal";
@@ -665,11 +665,11 @@ export default function DashboardPage() {
                         </div>
                       </div>
                       {/* Amount */}
-                      <div className={`flex items-center gap-1 text-sm font-semibold flex-shrink-0 ${t.type === "credit" ? "text-emerald-600" : "text-foreground"}`}>
+                      <div className={`flex items-center gap-1 text-sm font-semibold flex-shrink-0 ${t.type === "credit" ? "text-emerald-600" : "text-red-500"}`}>
                         {t.type === "credit" ? (
-                          <ArrowUpRight className="w-3.5 h-3.5" />
+                          <ArrowDownRight className="w-3.5 h-3.5" />
                         ) : (
-                          <ArrowDownRight className="w-3.5 h-3.5 text-muted-foreground" />
+                          <ArrowUpLeft className="w-3.5 h-3.5" />
                         )}
                         {formatINR(t.amount)}
                       </div>
