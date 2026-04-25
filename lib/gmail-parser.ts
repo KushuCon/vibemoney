@@ -285,8 +285,22 @@ export function parseTransactionEmail(
     /balance.*threshold/i,
     /please note that deposits or credits may take some time to reflect/i,
     /the balance in your account.*has dropped/i,
+    /reflect in your account/i,
+    /balance as of yesterday/i,
+    /account balance.*alert/i,
+    /your.*balance.*is.*rs\./i,
+    /low balance/i,
+    /minimum.*balance/i,
+    // HDFC specific balance emails
+    /greetings from hdfc bank.*available balance/i,
+    /greetings from hdfc bank.*balance.*dropped/i,
   ];
   if (BALANCE_ALERT_PATTERNS.some((p) => p.test(text))) return null;
+
+  // Block HDFC balance threshold notifications specifically
+  // Email says "balance dropped below Rs. 5,000" - 5000 is the threshold not a txn
+  const THRESHOLD_PATTERN = /balance.*dropped below\s+Rs\.\s*(?:INR\s*)?([0-9,]+)/i;
+  if (THRESHOLD_PATTERN.test(text)) return null;
 
   const senderDomain = senderEmail.split("@")[1]?.toLowerCase() || "";
 
