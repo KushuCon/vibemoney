@@ -30,6 +30,7 @@ import { supabaseAdmin } from "@/lib/supabase";
  */
 
 export async function POST(req: NextRequest) {
+  const { daysBack, syncAll } = await req.json().catch(() => ({}));
   const session = await getServerSession(authOptions);
 
   if (!session?.accessToken) {
@@ -44,9 +45,26 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { daysBack = 3 } = await req.json().catch(() => ({}));
-
   try {
+    const { data: userData } = await supabaseAdmin
+      .from("users")
+      .select("sync_from_date")
+      .eq("email", session.user?.email)
+      .single();
+
+    let effectiveDaysBack: number;
+
+    if (syncAll) {
+      // First-ever full sync window cap.
+      effectiveDaysBack = 365 * 3;
+    } else if (userData?.sync_from_date) {
+      const syncFrom = new Date(userData.sync_from_date);
+      const msPerDay = 1000 * 60 * 60 * 24;
+      effectiveDaysBack = Math.ceil((Date.now() - syncFrom.getTime()) / msPerDay) + 1;
+    } else {
+      effectiveDaysBack = daysBack ?? 90;
+    }
+
     // ── Setup Gmail client ──────────────────────────────────────────────────
     const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
@@ -60,7 +78,7 @@ export async function POST(req: NextRequest) {
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
     // ── Search for transaction emails ───────────────────────────────────────
-    const query = buildGmailQuery(daysBack);
+    const query = buildGmailQuery(effectiveDaysBack);
     console.log("Gmail search query:", query);
 
     const searchRes = await gmail.users.messages.list({
@@ -196,6 +214,7 @@ export async function POST(req: NextRequest) {
           source: parsed.source,
           email_id: parsed.email_id,
           raw_subject: parsed.raw_subject,
+          vpa: parsed.vpa ?? null,
         });
 
         synced++;
@@ -221,6 +240,13 @@ export async function POST(req: NextRequest) {
           { status: 500 }
         );
       }
+    }
+
+    if (!userData?.sync_from_date) {
+      await supabaseAdmin
+        .from("users")
+        .update({ sync_from_date: new Date().toISOString().split("T")[0] })
+        .eq("email", session.user?.email);
     }
 
     // ── Update last sync time ───────────────────────────────────────────────

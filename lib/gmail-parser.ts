@@ -36,6 +36,7 @@ export interface ParsedTransaction {
   raw_subject: string;
   email_id: string;
   source: string;
+  vpa?: string;
 }
 
 export interface ParsedBalance {
@@ -119,7 +120,7 @@ const BANK_PATTERNS: BankPattern[] = [
       amount:
         /(?:Rs\.|INR|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
       merchant:
-        /(?:debited from account \d+ to VPA\s+\S+\s+([A-Za-z0-9\s]{2,40})|(?:at|to|towards)\s+([A-Z][A-Za-z0-9\s\-&.'*]{2,40}))(?:\s+on\s|\s+via\s|\.|$)/i,
+        /debited from account \d+ to VPA\s+(\S+)\s+([A-Z][A-Za-z0-9\s]{1,39}?)(?:\s+on\s+\d|\.$|$)/i,
       account: /(?:a\/c|account)\s*(?:no\.?|number)?\s*[Xx*]+(\d{4})/i,
       debit:
         /(?:debited|debit|spent|withdrawn|paid|purchase)/i,
@@ -249,9 +250,10 @@ export function parseBalanceAlert(
   const text = `${subject}\n${emailBody}`;
 
   const balancePatterns = [
+    /available balance in your account[^i]*is\s+Rs\.\s*(?:INR\s*)?([0-9,]+(?:\.[0-9]{1,2})?)/i,
     /[Bb]alance\s+(?:as of[^:]*)?:?\s*Rs\.?\s*(?:INR\s*)?([0-9,]+(?:\.[0-9]{1,2})?)/i,
-    /[Aa]vailable\s+[Bb]alance\s*:?\s*(?:Rs\.?|INR|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
-    /(?:Rs\.?|INR|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)\s+(?:is your|as your)\s+(?:current\s+)?balance/i,
+    /[Aa]vailable\s+[Bb]alance\s*:?\s*(?:Rs\.?|INR|₹)\s*(?:INR\s*)?([0-9,]+(?:\.[0-9]{1,2})?)/i,
+    /(?:Rs\.?|INR|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)(?:\s+is your|\s+as your)\s+(?:current\s+)?balance/i,
   ];
 
   for (const pattern of balancePatterns) {
@@ -292,7 +294,9 @@ export function parseTransactionEmail(
 
   // Find matching bank pattern
   let matchedBank = BANK_PATTERNS.find((b) =>
-    b.senders.some((s) => senderDomain.includes(s.replace(/^[^.]+\./, "")))
+    b.senders.some((s) => {
+      return senderDomain === s || senderDomain.endsWith(`.${s}`) || senderDomain.includes(s);
+    })
   );
 
   // Fallback: try all patterns
@@ -329,11 +333,26 @@ export function parseTransactionEmail(
   const isCredit = p.credit ? p.credit.test(text) : false;
   const type: "debit" | "credit" = isCredit && !isDebit ? "credit" : "debit";
 
-  // Extract merchant
+  // Extract merchant + VPA
   const merchantMatch = text.match(p.merchant);
-  const merchant = merchantMatch
-    ? cleanMerchant(merchantMatch[1] || merchantMatch[2] || "")
-    : extractMerchantFromSubject(subject);
+  let merchant = "Unknown";
+  let vpa: string | undefined;
+
+  if (matchedBank.name === "HDFC Bank" && merchantMatch) {
+    vpa = merchantMatch[1];
+    const rawName = (merchantMatch[2] || "").trim();
+    const isPhoneNumber = /^\d{10}$/.test(rawName.replace(/\s/g, ""));
+    const isMeaningless = rawName.length < 2 || isPhoneNumber;
+    merchant = isMeaningless ? "UPI Payment" : cleanMerchant(rawName);
+  } else if (merchantMatch) {
+    merchant = cleanMerchant(merchantMatch[1] || merchantMatch[2] || "");
+  } else {
+    merchant = extractMerchantFromSubject(subject);
+  }
+
+  if ((merchant === "Unknown" || merchant === "") && vpa) {
+    merchant = "UPI Payment";
+  }
 
   // Extract account
   const accountMatch = p.account ? text.match(p.account) : null;
@@ -352,6 +371,7 @@ export function parseTransactionEmail(
     raw_subject: subject,
     email_id: emailId,
     source: matchedBank.name,
+    vpa,
   };
 }
 

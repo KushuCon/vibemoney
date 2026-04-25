@@ -11,18 +11,19 @@ export async function GET() {
 
   const { data, error } = await supabaseAdmin
     .from("users")
-    .select("monthly_budget, bank_balance, balance_updated_at")
+    .select("monthly_budget, bank_balance, balance_updated_at, sync_from_date")
     .eq("email", session.user.email)
     .single();
 
   if (error) {
-    return NextResponse.json({ budget: null, balance: null, balanceUpdatedAt: null });
+    return NextResponse.json({ budget: null, balance: null, balanceUpdatedAt: null, syncFromDate: null });
   }
 
   return NextResponse.json({
     budget: data?.monthly_budget ?? null,
     balance: data?.bank_balance ?? null,
     balanceUpdatedAt: data?.balance_updated_at ?? null,
+    syncFromDate: data?.sync_from_date ?? null,
   });
 }
 

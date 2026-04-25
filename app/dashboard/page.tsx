@@ -11,7 +11,7 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   RefreshCw, LogOut, Sparkles, TrendingDown, TrendingUp,
-  ArrowDownRight, ArrowUpLeft, Calendar
+  ArrowDownRight, ArrowUpLeft, Calendar, Search
 } from "lucide-react";
 import { VIBE_CATEGORIES } from "@/lib/vibe-categories";
 import { WrappedModal } from "@/components/wrapped-modal";
@@ -30,6 +30,8 @@ interface Transaction {
   category_emoji: string;
   date: string;
   source: string;
+  account_last4?: string;
+  vpa?: string;
 }
 
 interface CategoryStat {
@@ -43,6 +45,84 @@ interface CategoryStat {
   percentage: number;
 }
 
+function SpendingHeatmap({ transactions }: { transactions: Transaction[] }) {
+  const today = new Date();
+  const days: { date: string; spent: number; received: number }[] = [];
+
+  for (let i = 89; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().split("T")[0];
+    const dayTxns = transactions.filter((t) => t.date === dateStr);
+    days.push({
+      date: dateStr,
+      spent: dayTxns.filter((t) => t.type === "debit").reduce((s, t) => s + t.amount, 0),
+      received: dayTxns.filter((t) => t.type === "credit").reduce((s, t) => s + t.amount, 0),
+    });
+  }
+
+  const firstDayOfWeek = new Date(today);
+  firstDayOfWeek.setDate(firstDayOfWeek.getDate() - 89);
+  const startDayOfWeek = firstDayOfWeek.getDay();
+
+  const padded = [...Array(startDayOfWeek).fill(null), ...days];
+  const weeks: (typeof days[0] | null)[][] = [];
+  for (let i = 0; i < padded.length; i += 7) {
+    weeks.push(padded.slice(i, i + 7));
+  }
+
+  const getColor = (day: typeof days[0] | null) => {
+    if (!day || (day.spent === 0 && day.received === 0)) return "bg-secondary";
+    const net = day.received - day.spent;
+    if (net > 0) return "bg-emerald-500";
+    if (net === 0) return "bg-yellow-400";
+    const ratio = day.spent / (day.received || 1);
+    if (ratio > 5) return "bg-red-600";
+    if (ratio > 2) return "bg-red-500";
+    return "bg-red-400";
+  };
+
+  const dayLabels = ["S", "M", "T", "W", "T", "F", "S"];
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-muted-foreground">Spending Heatmap</span>
+        <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-emerald-500 inline-block" /> Net positive</span>
+          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-red-500 inline-block" /> Net negative</span>
+          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-secondary inline-block" /> No activity</span>
+        </div>
+      </div>
+      <div className="flex gap-1 overflow-x-auto pb-1">
+        <div className="flex flex-col gap-1 mr-1">
+          {dayLabels.map((d, i) => (
+            <div key={i} className="w-3 h-3 text-[9px] text-muted-foreground flex items-center justify-center">
+              {i % 2 === 1 ? d : ""}
+            </div>
+          ))}
+        </div>
+        {weeks.map((week, wi) => (
+          <div key={wi} className="flex flex-col gap-1">
+            {week.map((day, di) => {
+              if (!day) return <div key={di} className="w-3 h-3" />;
+              const net = day.received - day.spent;
+              const tooltip = `${day.date}\nSpent: ₹${day.spent.toLocaleString("en-IN")}\nReceived: ₹${day.received.toLocaleString("en-IN")}\nNet: ${net >= 0 ? "+" : ""}₹${net.toLocaleString("en-IN")}`;
+              return (
+                <div
+                  key={di}
+                  title={tooltip}
+                  className={`w-3 h-3 rounded-sm cursor-default transition-opacity hover:opacity-80 ${getColor(day)}`}
+                />
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
@@ -52,6 +132,12 @@ export default function DashboardPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
   const [selectedMonth, setSelectedMonth] = useState(format(new Date(), "yyyy-MM"));
+  const [selectedAccount, setSelectedAccount] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterCategory, setFilterCategory] = useState("all");
+  const [filterType, setFilterType] = useState<"all" | "debit" | "credit">("all");
+  const [showSyncOptions, setShowSyncOptions] = useState(false);
+  const [hasEverSynced, setHasEverSynced] = useState(false);
   const [showWrapped, setShowWrapped] = useState(false);
   const [wrappedData, setWrappedData] = useState(null);
   const [wrappedError, setWrappedError] = useState("");
@@ -114,6 +200,7 @@ export default function DashboardPage() {
         } else {
           setBalanceUpdatedAt(null);
         }
+        setHasEverSynced(!!d.syncFromDate);
       })
       .catch(() => setBudget(null))
       .finally(() => setBudgetLoaded(true));
@@ -125,14 +212,15 @@ export default function DashboardPage() {
     }
   }, [session, loading, budgetLoaded, transactions.length, budget, dismissedBudgetPrompt]);
 
-  const handleSync = async (days = 3) => {
+  const handleSync = async (days?: number) => {
     setSyncing(true);
     setSyncMessage("");
     try {
+      const payload = typeof days === "number" ? { daysBack: days } : {};
       const res = await fetch("/api/gmail/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ daysBack: days }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (data.error) {
@@ -141,6 +229,7 @@ export default function DashboardPage() {
         const skipped = data.skipped ?? 0;
         const failed = data.failed ?? 0;
         setSyncMessage(`✓ ${data.synced} synced · ${skipped} skipped${failed > 0 ? ` · ${failed} failed` : ""}`);
+        setHasEverSynced(true);
         fetchTransactions();
       }
     } catch {
@@ -148,6 +237,31 @@ export default function DashboardPage() {
     } finally {
       setSyncing(false);
       setTimeout(() => setSyncMessage(""), 4000);
+    }
+  };
+
+  const handleSyncAll = async () => {
+    setSyncing(true);
+    setSyncMessage("Syncing all transactions… this may take a minute");
+    try {
+      const res = await fetch("/api/gmail/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ syncAll: true }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setSyncMessage(`Error: ${data.error}`);
+      } else {
+        setSyncMessage(`✓ ${data.synced} synced · ${data.skipped} skipped`);
+        setHasEverSynced(true);
+        fetchTransactions();
+      }
+    } catch {
+      setSyncMessage("Sync failed. Try again.");
+    } finally {
+      setSyncing(false);
+      setTimeout(() => setSyncMessage(""), 6000);
     }
   };
 
@@ -269,15 +383,36 @@ export default function DashboardPage() {
   };
 
   // ── Computed stats ──────────────────────────────────────────────────────────
-  const debits = transactions.filter((t) => t.type === "debit");
-  const credits = transactions.filter((t) => t.type === "credit");
+  const accounts = Array.from(
+    new Set(transactions.map((t) => t.account_last4).filter(Boolean))
+  ) as string[];
+
+  const filteredTransactions = selectedAccount === "all"
+    ? transactions
+    : transactions.filter((t) => t.account_last4 === selectedAccount);
+
+  const searchedTransactions = filteredTransactions.filter((t) => {
+    const matchesSearch =
+      searchQuery === "" ||
+      t.merchant.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      t.vpa?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      t.category_name.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesCategory = filterCategory === "all" || t.category_id === filterCategory;
+    const matchesType = filterType === "all" || t.type === filterType;
+    return matchesSearch && matchesCategory && matchesType;
+  });
+
+  const filteredDebits = filteredTransactions.filter((t) => t.type === "debit");
+  const filteredCredits = filteredTransactions.filter((t) => t.type === "credit");
+  const debits = filteredDebits;
+  const credits = filteredCredits;
   const totalSpent = debits.reduce((s, t) => s + t.amount, 0);
   const totalReceived = credits.reduce((s, t) => s + t.amount, 0);
 
   // Category breakdown
   const categoryStats: CategoryStat[] = VIBE_CATEGORIES.slice(0, -1)
     .map((cat) => {
-      const catTxns = debits.filter((t) => t.category_id === cat.id);
+      const catTxns = filteredDebits.filter((t) => t.category_id === cat.id);
       const amount = catTxns.reduce((s, t) => s + t.amount, 0);
       return {
         id: cat.id,
@@ -295,7 +430,7 @@ export default function DashboardPage() {
 
   // Daily spend chart data
   const dailyMap: Record<string, number> = {};
-  for (const t of debits) {
+  for (const t of filteredDebits) {
     const day = t.date.substring(8, 10);
     dailyMap[day] = (dailyMap[day] || 0) + t.amount;
   }
@@ -336,16 +471,60 @@ export default function DashboardPage() {
                 <option key={m.value} value={m.value}>{m.label}</option>
               ))}
             </select>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleSync()}
-              disabled={syncing}
-              className="gap-1.5 text-xs h-8 rounded-lg"
-            >
-              <RefreshCw className={`w-3 h-3 ${syncing ? "animate-spin" : ""}`} />
-              {syncing ? "Syncing…" : "Sync Gmail"}
-            </Button>
+            <div className="relative">
+              <div className="flex">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleSync()}
+                  disabled={syncing}
+                  className="gap-1.5 text-xs h-8 rounded-l-lg rounded-r-none border-r-0"
+                >
+                  <RefreshCw className={`w-3 h-3 ${syncing ? "animate-spin" : ""}`} />
+                  {syncing ? "Syncing…" : "Sync Gmail"}
+                </Button>
+                <button
+                  onClick={() => setShowSyncOptions(!showSyncOptions)}
+                  className="h-8 px-2 text-xs border border-border rounded-r-lg hover:bg-secondary transition-colors"
+                >
+                  ▾
+                </button>
+              </div>
+              {showSyncOptions && (
+                <div className="absolute right-0 top-10 z-50 bg-card border border-border rounded-xl shadow-xl p-2 w-52 space-y-1">
+                  <button
+                    onClick={() => { handleSync(7); setShowSyncOptions(false); }}
+                    className="w-full text-left text-xs px-3 py-2 rounded-lg hover:bg-secondary transition-colors"
+                  >
+                    🔄 Last 7 days
+                  </button>
+                  <button
+                    onClick={() => { handleSync(30); setShowSyncOptions(false); }}
+                    className="w-full text-left text-xs px-3 py-2 rounded-lg hover:bg-secondary transition-colors"
+                  >
+                    📅 Last 30 days
+                  </button>
+                  <button
+                    onClick={() => { handleSync(90); setShowSyncOptions(false); }}
+                    className="w-full text-left text-xs px-3 py-2 rounded-lg hover:bg-secondary transition-colors"
+                  >
+                    🗓️ Last 90 days
+                  </button>
+                  <div className="h-px bg-border my-1" />
+                  <button
+                    onClick={() => {
+                      if (confirm("This will sync ALL your bank emails (up to 3 years). May take a minute.")) {
+                        handleSyncAll();
+                      }
+                      setShowSyncOptions(false);
+                    }}
+                    className="w-full text-left text-xs px-3 py-2 rounded-lg hover:bg-red-500/10 text-red-500 transition-colors"
+                  >
+                    ⚡ {hasEverSynced ? "Sync all time" : "First-time sync all"}
+                  </button>
+                </div>
+              )}
+            </div>
             <div className="hidden sm:flex items-center gap-2">
               <Button
                 variant="outline"
@@ -406,6 +585,35 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {accounts.length > 1 && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-muted-foreground">Account:</span>
+            <button
+              onClick={() => setSelectedAccount("all")}
+              className={`text-xs px-3 py-1 rounded-full border transition-colors ${
+                selectedAccount === "all"
+                  ? "bg-foreground text-background border-foreground"
+                  : "border-border hover:bg-secondary"
+              }`}
+            >
+              All
+            </button>
+            {accounts.map((acc) => (
+              <button
+                key={acc}
+                onClick={() => setSelectedAccount(acc === selectedAccount ? "all" : acc)}
+                className={`text-xs px-3 py-1 rounded-full border font-mono transition-colors ${
+                  selectedAccount === acc
+                    ? "bg-foreground text-background border-foreground"
+                    : "border-border hover:bg-secondary"
+                }`}
+              >
+                ••{acc}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Stats row */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           {loading ? (
@@ -449,11 +657,13 @@ export default function DashboardPage() {
                     {formatINR(totalReceived - totalSpent)}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">this month</div>
-                  {totalReceived > 0 && (
-                    <div className="text-xs text-muted-foreground mt-1">
-                      {Math.round(((totalReceived - totalSpent) / totalReceived) * 100)}% savings rate
-                    </div>
-                  )}
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {totalReceived > 0
+                      ? `${Math.round(((totalReceived - totalSpent) / totalReceived) * 100)}% savings rate`
+                      : totalSpent > 0
+                      ? `₹${totalSpent.toLocaleString("en-IN")} spent, no income tracked`
+                      : null}
+                  </div>
                 </CardContent>
               </Card>
               <Card className="rounded-xl border-border/60">
@@ -625,11 +835,71 @@ export default function DashboardPage() {
           </Card>
         </div>
 
+        {!loading && filteredTransactions.length > 0 && (
+          <Card className="rounded-xl border-border/60">
+            <CardContent className="p-4">
+              <SpendingHeatmap transactions={filteredTransactions} />
+            </CardContent>
+          </Card>
+        )}
+
         {/* Transactions list */}
         <Card className="rounded-xl border-border/60">
-          <CardHeader className="pb-3 pt-4 px-4 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium">Recent Transactions</CardTitle>
-            <span className="text-xs text-muted-foreground">{transactions.length} total</span>
+          <CardHeader className="pb-3 pt-4 px-4">
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm font-medium">Recent Transactions</CardTitle>
+                <span className="text-xs text-muted-foreground">
+                  {searchedTransactions.length} of {transactions.length}
+                </span>
+              </div>
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="text"
+                  placeholder="Search merchant, VPA, category…"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-8 pr-4 py-2 text-xs bg-secondary border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-foreground/20"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery("")}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                {(["all", "debit", "credit"] as const).map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => setFilterType(type)}
+                    className={`text-xs px-2.5 py-1 rounded-full border transition-colors capitalize ${
+                      filterType === type
+                        ? "bg-foreground text-background border-foreground"
+                        : "border-border hover:bg-secondary"
+                    }`}
+                  >
+                    {type === "debit" ? "💸 Spent" : type === "credit" ? "📥 Received" : "All"}
+                  </button>
+                ))}
+                <div className="h-3 w-px bg-border" />
+                <select
+                  value={filterCategory}
+                  onChange={(e) => setFilterCategory(e.target.value)}
+                  className="text-xs bg-secondary border border-border rounded-full px-2.5 py-1 text-foreground cursor-pointer"
+                >
+                  <option value="all">All vibes</option>
+                  {VIBE_CATEGORIES.slice(0, -1).map((cat) => (
+                    <option key={cat.id} value={cat.id}>
+                      {cat.emoji} {cat.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
           </CardHeader>
           <CardContent className="px-0 pb-2">
             {loading ? (
@@ -640,7 +910,7 @@ export default function DashboardPage() {
               </div>
             ) : transactions.length > 0 ? (
               <div className="divide-y divide-border/50">
-                {transactions.slice(0, 20).map((t) => {
+                {searchedTransactions.slice(0, 50).map((t) => {
                   const cat = VIBE_CATEGORIES.find((c) => c.id === t.category_id);
                   return (
                     <div key={t.id} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors">
@@ -661,6 +931,16 @@ export default function DashboardPage() {
                             <Calendar className="w-3 h-3 inline mr-1" />
                             {format(new Date(t.date + "T00:00:00"), "dd MMM")}
                           </span>
+                          {t.vpa && (
+                            <span className="text-xs text-muted-foreground font-mono opacity-60 truncate max-w-[120px]">
+                              {t.vpa}
+                            </span>
+                          )}
+                          {t.account_last4 && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground font-mono">
+                              ••{t.account_last4}
+                            </span>
+                          )}
                           <span className="text-xs text-muted-foreground">{t.source}</span>
                         </div>
                       </div>
@@ -676,9 +956,14 @@ export default function DashboardPage() {
                     </div>
                   );
                 })}
-                {transactions.length > 20 && (
+                {searchedTransactions.length > 50 && (
                   <div className="px-4 py-3 text-xs text-muted-foreground text-center">
-                    Showing 20 of {transactions.length} transactions
+                    Showing 50 of {searchedTransactions.length} — refine your search
+                  </div>
+                )}
+                {searchedTransactions.length === 0 && transactions.length > 0 && (
+                  <div className="py-8 text-center text-sm text-muted-foreground">
+                    No transactions match your search
                   </div>
                 )}
               </div>

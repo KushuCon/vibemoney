@@ -17,8 +17,7 @@ export async function GET(req: NextRequest) {
     .from("transactions")
     .select("*")
     .eq("user_email", session.user.email)
-    .order("date", { ascending: false })
-    .limit(limit);
+    .order("date", { ascending: false });
 
   if (month) {
     const [year, monthNum] = month.split("-").map(Number);
@@ -27,6 +26,8 @@ export async function GET(req: NextRequest) {
       .gte("date", `${month}-01`)
       .lte("date", `${month}-${lastDay}`);
   }
+
+  query = query.limit(limit);
 
   const { data, error } = await query;
 
