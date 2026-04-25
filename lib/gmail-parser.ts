@@ -279,14 +279,12 @@ export function parseTransactionEmail(
 ): ParsedTransaction | null {
   const text = `${subject}\n${emailBody}`;
 
-  // Skip balance alert emails (not transactions)
   const BALANCE_ALERT_PATTERNS = [
     /available balance in your account/i,
     /balance.*has dropped below/i,
     /balance.*threshold/i,
-    /account balance.*alert/i,
-    /your.*balance.*is\s+Rs\./i,
     /please note that deposits or credits may take some time to reflect/i,
+    /the balance in your account.*has dropped/i,
   ];
   if (BALANCE_ALERT_PATTERNS.some((p) => p.test(text))) return null;
 
