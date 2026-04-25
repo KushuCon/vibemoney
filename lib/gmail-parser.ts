@@ -50,9 +50,8 @@ export const BANK_SENDERS = [
   "alerts@hdfcbank.net",
   "noreply@hdfcbank.com",
   "hdfc_alerts@hdfcbank.net",
-  // Find the BANK_SENDERS array and add this:
-"alerts@hdfcbank.bank.in",
-"noreply@hdfcbank.bank.in",
+  "alerts@hdfcbank.bank.in",
+  "noreply@hdfcbank.bank.in",
   // SBI
   "alerts@sbi.co.in",
   "noreply@sbi.co.in",
@@ -84,12 +83,16 @@ export const BANK_SENDERS = [
   // CRED
   "noreply@cred.club",
   "payments@cred.club",
+  // Zerodha
+  "noreply-cashier@mailer.zerodha.com",
+  "noreply@mailer.zerodha.com",
 ];
 
 // Gmail search query to find transaction emails
 export function buildGmailQuery(daysBack = 90): string {
   const fromQuery = BANK_SENDERS.map((s) => `from:${s}`).join(" OR ");
-  const keywordsQuery = "(debited OR credited OR transaction OR payment OR spent OR UPI OR balance)";
+  const keywordsQuery =
+    "(debited OR credited OR transaction OR payment OR spent OR UPI OR balance OR payout)";
   return `(${fromQuery}) ${keywordsQuery} newer_than:${daysBack}d`;
 }
 
@@ -116,7 +119,7 @@ const BANK_PATTERNS: BankPattern[] = [
       amount:
         /(?:Rs\.|INR|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
       merchant:
-        /(?:to VPA\s+\S+\s+([A-Za-z\s]{2,40})|(?:at|to|towards)\s+([A-Z][A-Za-z0-9\s\-&.'*]{2,40}))(?:\s+on|\s+via|\.|$)/i,
+        /(?:debited from account \d+ to VPA\s+\S+\s+([A-Za-z0-9\s]{2,40})|(?:at|to|towards)\s+([A-Z][A-Za-z0-9\s\-&.'*]{2,40}))(?:\s+on\s|\s+via\s|\.|$)/i,
       account: /(?:a\/c|account)\s*(?:no\.?|number)?\s*[Xx*]+(\d{4})/i,
       debit:
         /(?:debited|debit|spent|withdrawn|paid|purchase)/i,
@@ -169,6 +172,17 @@ const BANK_PATTERNS: BankPattern[] = [
       account: /[Xx*]+(\d{4})/i,
       debit: /(?:debited|debit)/i,
       credit: /(?:credited|credit)/i,
+    },
+  },
+  {
+    name: "Zerodha",
+    senders: ["mailer.zerodha.com"],
+    patterns: {
+      amount: /(?:₹|Rs\.?|INR)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+      merchant: /(?:instant payout|withdrawal|payout)/i,
+      account: /account ending with\s+(\d{4})/i,
+      credit: /(?:payout.*processed|deposited to your|instant payout)/i,
+      debit: /(?:funds withdrawn|transfer out)/i,
     },
   },
   {
@@ -262,6 +276,18 @@ export function parseTransactionEmail(
   senderEmail: string
 ): ParsedTransaction | null {
   const text = `${subject}\n${emailBody}`;
+
+  // Skip balance alert emails (not transactions)
+  const BALANCE_ALERT_PATTERNS = [
+    /available balance in your account/i,
+    /balance.*has dropped below/i,
+    /balance.*threshold/i,
+    /account balance.*alert/i,
+    /your.*balance.*is\s+Rs\./i,
+    /please note that deposits or credits may take some time to reflect/i,
+  ];
+  if (BALANCE_ALERT_PATTERNS.some((p) => p.test(text))) return null;
+
   const senderDomain = senderEmail.split("@")[1]?.toLowerCase() || "";
 
   // Find matching bank pattern
@@ -281,6 +307,22 @@ export function parseTransactionEmail(
   if (!amountMatch) return null;
   const amount = cleanAmount(amountMatch[1]);
   if (amount <= 0) return null;
+
+  // Special case: Zerodha payouts are credits to self
+  if (matchedBank.name === "Zerodha") {
+    const accountMatch = p.account ? text.match(p.account) : null;
+    return {
+      amount,
+      type: "credit",
+      merchant: "Zerodha",
+      description: subject.substring(0, 100),
+      date: extractDate(text, emailDate),
+      account_last4: accountMatch?.[1],
+      raw_subject: subject,
+      email_id: emailId,
+      source: "Zerodha",
+    };
+  }
 
   // Extract transaction type
   const isDebit = p.debit ? p.debit.test(text) : true;

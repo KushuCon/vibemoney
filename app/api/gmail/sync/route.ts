@@ -150,7 +150,9 @@ export async function POST(req: NextRequest) {
 
         const balanceParsed = parseBalanceAlert(body, subject, msg.id, emailDate);
         if (balanceParsed) {
-          const balanceIso = new Date(emailDate).toISOString();
+          const balanceIso = dateHeader
+            ? new Date(dateHeader).toISOString()
+            : new Date(emailDate).toISOString();
           const { data: userData } = await supabaseAdmin
             .from("users")
             .select("balance_updated_at")
