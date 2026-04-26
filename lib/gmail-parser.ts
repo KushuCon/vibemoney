@@ -24,6 +24,7 @@
  * - Paytm
  * - Amazon Pay
  * - CRED
+ * - Zerodha (instant payouts only)
  */
 
 export interface ParsedTransaction {
@@ -84,6 +85,8 @@ export const BANK_SENDERS = [
   // CRED
   "noreply@cred.club",
   "payments@cred.club",
+  // Zerodha (Fix 2: added back)
+  "noreply-cashier@mailer.zerodha.com",
 ];
 
 // Gmail search query to find transaction emails
@@ -116,12 +119,14 @@ const BANK_PATTERNS: BankPattern[] = [
     patterns: {
       amount:
         /(?:Rs\.(?:INR\s*)?|INR\s*|₹\s*)([0-9,]+(?:\.[0-9]{1,2})?)/i,
+      // Fix 1: Updated merchant regex to handle UPI debit, UPI credit, and NEFT credit
       merchant:
-        /(?:debited from account \d+ to VPA\s+(\S+)\s+([A-Z][A-Za-z0-9\s]{1,39}?)(?:\s+on\s+\d|\.$|$))|(?:from NEFT\s+Cr-[^-]+-([A-Z][A-Za-z\s]{2,40})-)/i,
+        /(?:debited from account \d+ to VPA\s+(\S+)\s+([A-Z][A-Za-z0-9\s]{1,39}?)(?:\s+on\s+\d|\.$|$))|(?:credited to your account \*+\d+ by VPA\s+(\S+)\s+([A-Z][A-Za-z0-9\s]{1,39}?)(?:\s+on|\.))|(?:from NEFT\s+Cr-[^-]+-([A-Z][A-Za-z\s]{2,40})-)/i,
       account: /(?:a\/c|account)\s*(?:no\.?|number)?\s*[Xx*]+(\d{4})/i,
       debit:
         /(?:debited|debit|spent|withdrawn|paid|purchase)/i,
-      credit: /(?:credited|credit|received|refund|successfully added to your account|neft cr)/i,
+      // Fix 1: Updated credit pattern to catch UPI credits AND NEFT
+      credit: /(?:credited|credit|received|refund|successfully added to your account|neft cr|is successfully credited to your account)/i,
     },
   },
   {
@@ -170,6 +175,18 @@ const BANK_PATTERNS: BankPattern[] = [
       account: /[Xx*]+(\d{4})/i,
       debit: /(?:debited|debit)/i,
       credit: /(?:credited|credit)/i,
+    },
+  },
+  // Fix 2: Zerodha added back — instant payouts only
+  {
+    name: "Zerodha",
+    senders: ["mailer.zerodha.com"],
+    patterns: {
+      amount: /(?:₹|Rs\.?|INR)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+      merchant: /zerodha/i,
+      account: /account ending with\s+(\d{4})/i,
+      credit: /(?:payout.*processed|deposited to your primary bank)/i,
+      debit: /(?:deposited to zerodha|has been deposited to zerodha equity)/i,
     },
   },
   {
@@ -265,23 +282,23 @@ export function parseTransactionEmail(
 ): ParsedTransaction | null {
   const text = `${subject}\n${emailBody}`;
 
-  // First check if this email has a REAL transaction
-  const HAS_REAL_TRANSACTION = /(?:has been successfully added to your account|neft cr|neft dr|imps cr|imps dr|rs\..*has been debited|rs\..*debited from account|has been debited from)/i.test(text);
+  // Fix 1: Proper HAS_REAL_TRANSACTION check — filters balance-only emails
+  const HAS_REAL_TRANSACTION =
+    /(?:has been successfully added to your account|neft cr|neft dr|imps cr|imps dr|has been debited from|debited from account \d+ to vpa|successfully credited to your account|is successfully credited)/i.test(text);
 
-  // Only block pure balance alert emails (no real transaction in them)
+  // Pure balance-only emails — skip entirely
   if (!HAS_REAL_TRANSACTION) {
-    const BALANCE_ALERT_PATTERNS = [
+    const BALANCE_ONLY_PATTERNS = [
       /available balance in your account/i,
       /balance[\s\S]{0,50}has dropped below/i,
       /balance[\s\S]{0,50}threshold/i,
-      /please note that deposits or credits may take some time to reflect/i,
       /reflect in your account/i,
       /balance as of yesterday/i,
-      /greetings from hdfc bank/i,
+      /greetings from hdfc bank/i, // safe now since NEFT passes HAS_REAL_TRANSACTION
       /low balance/i,
       /minimum.*balance/i,
     ];
-    if (BALANCE_ALERT_PATTERNS.some((p) => p.test(text))) return null;
+    if (BALANCE_ONLY_PATTERNS.some((p) => p.test(text))) return null;
   }
 
   const senderDomain = senderEmail.split("@")[1]?.toLowerCase() || "";
@@ -300,6 +317,33 @@ export function parseTransactionEmail(
 
   const p = matchedBank.patterns;
 
+  // Fix 2: Zerodha special case — only process instant payouts (credits)
+  if (matchedBank.name === "Zerodha") {
+    const isCredit = /instant payout request processed|deposited to your primary bank/i.test(text);
+    // Skip "Payment success" emails — those are HDFC debits, already captured
+    if (!isCredit) return null;
+
+    const amountMatch = text.match(p.amount);
+    if (!amountMatch) return null;
+    const amount = cleanAmount(amountMatch[1]);
+    if (amount <= 0) return null;
+
+    const accountMatch = p.account ? text.match(p.account) : null;
+
+    return {
+      amount,
+      type: "credit",
+      merchant: "Zerodha Payout",
+      description: subject.substring(0, 100),
+      date: extractDate(text, emailDate),
+      account_last4: accountMatch?.[1],
+      raw_subject: subject,
+      email_id: emailId,
+      source: "Zerodha",
+      vpa: undefined,
+    };
+  }
+
   // Extract amount
   const amountMatch = text.match(p.amount);
   if (!amountMatch) return null;
@@ -316,6 +360,7 @@ export function parseTransactionEmail(
   let merchant = "Unknown";
   let vpa: string | undefined;
 
+  // Fix 1: Updated HDFC merchant extraction to handle all 3 capture groups
   if (matchedBank.name === "HDFC Bank" && merchantMatch) {
     if (merchantMatch[1] && merchantMatch[2]) {
       // UPI debit: group1=VPA, group2=name
@@ -323,9 +368,13 @@ export function parseTransactionEmail(
       const rawName = merchantMatch[2].trim();
       const isPhoneNumber = /^\d{10}$/.test(rawName.replace(/\s/g, ""));
       merchant = (rawName.length < 2 || isPhoneNumber) ? "UPI Payment" : cleanMerchant(rawName);
-    } else if (merchantMatch[3]) {
-      // NEFT credit: group3=sender name e.g. "BROKERING LTD"
-      merchant = cleanMerchant(merchantMatch[3]);
+    } else if (merchantMatch[3] && merchantMatch[4]) {
+      // UPI credit: group3=VPA, group4=sender name
+      vpa = merchantMatch[3];
+      merchant = cleanMerchant(merchantMatch[4].trim());
+    } else if (merchantMatch[5]) {
+      // NEFT credit: group5=sender name
+      merchant = cleanMerchant(merchantMatch[5]);
     }
   } else if (merchantMatch) {
     merchant = cleanMerchant(merchantMatch[1] || merchantMatch[2] || "");

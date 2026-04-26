@@ -136,7 +136,7 @@ export default function DashboardPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterCategory, setFilterCategory] = useState("all");
   const [filterType, setFilterType] = useState<"all" | "debit" | "credit">("all");
-  const [showSyncOptions, setShowSyncOptions] = useState(false);
+  // Fix 3: Removed showSyncOptions state
   const [hasEverSynced, setHasEverSynced] = useState(false);
   const [showWrapped, setShowWrapped] = useState(false);
   const [wrappedData, setWrappedData] = useState(null);
@@ -153,6 +153,13 @@ export default function DashboardPage() {
   const [showBudgetModal, setShowBudgetModal] = useState(false);
   const [budgetInput, setBudgetInput] = useState("");
   const [dismissedBudgetPrompt, setDismissedBudgetPrompt] = useState(false);
+
+  // Fix 4: Date filter state
+  const [dateFilterMode, setDateFilterMode] = useState<"none" | "single" | "range">("none");
+  const [filterSingleDate, setFilterSingleDate] = useState("");
+  const [filterFromDate, setFilterFromDate] = useState("");
+  const [filterToDate, setFilterToDate] = useState("");
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
@@ -220,24 +227,26 @@ export default function DashboardPage() {
     }
   }, [session, loading, budgetLoaded, transactions.length, budget, dismissedBudgetPrompt]);
 
-  const handleSync = async (days?: number) => {
+  // Fix 3: handleSync — always syncs current month only, no dropdown
+  const handleSync = async () => {
     setSyncing(true);
     setSyncMessage("");
     try {
-      const payload = typeof days === "number" ? { daysBack: days } : {};
+      // Always sync current month only (days since start of month + 1)
+      const now = new Date();
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      const daysBack = Math.ceil((now.getTime() - startOfMonth.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+
       const res = await fetch("/api/gmail/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ daysBack }),
       });
       const data = await res.json();
       if (data.error) {
         setSyncMessage(`Error: ${data.error}`);
       } else {
-        const skipped = data.skipped ?? 0;
-        const failed = data.failed ?? 0;
-        setSyncMessage(`✓ ${data.synced} synced · ${skipped} skipped${failed > 0 ? ` · ${failed} failed` : ""}`);
-        setHasEverSynced(true);
+        setSyncMessage(`✓ ${data.synced} synced · ${data.skipped} skipped`);
         fetchTransactions();
       }
     } catch {
@@ -245,31 +254,6 @@ export default function DashboardPage() {
     } finally {
       setSyncing(false);
       setTimeout(() => setSyncMessage(""), 4000);
-    }
-  };
-
-  const handleSyncAll = async () => {
-    setSyncing(true);
-    setSyncMessage("Syncing all transactions… this may take a minute");
-    try {
-      const res = await fetch("/api/gmail/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ syncAll: true }),
-      });
-      const data = await res.json();
-      if (data.error) {
-        setSyncMessage(`Error: ${data.error}`);
-      } else {
-        setSyncMessage(`✓ ${data.synced} synced · ${data.skipped} skipped`);
-        setHasEverSynced(true);
-        fetchTransactions();
-      }
-    } catch {
-      setSyncMessage("Sync failed. Try again.");
-    } finally {
-      setSyncing(false);
-      setTimeout(() => setSyncMessage(""), 6000);
     }
   };
 
@@ -410,6 +394,17 @@ export default function DashboardPage() {
     return matchesSearch && matchesCategory && matchesType;
   });
 
+  // Fix 4: Date-filtered transactions derived from searchedTransactions
+  const dateFilteredTransactions = searchedTransactions.filter((t) => {
+    if (dateFilterMode === "single" && filterSingleDate) {
+      return t.date === filterSingleDate;
+    }
+    if (dateFilterMode === "range" && filterFromDate && filterToDate) {
+      return t.date >= filterFromDate && t.date <= filterToDate;
+    }
+    return true;
+  });
+
   const filteredDebits = filteredTransactions.filter((t) => t.type === "debit");
   const filteredCredits = filteredTransactions.filter((t) => t.type === "credit");
   const debits = filteredDebits;
@@ -479,60 +474,19 @@ export default function DashboardPage() {
                 <option key={m.value} value={m.value}>{m.label}</option>
               ))}
             </select>
-            <div className="relative">
-              <div className="flex">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => handleSync()}
-                  disabled={syncing}
-                  className="gap-1.5 text-xs h-8 rounded-l-lg rounded-r-none border-r-0"
-                >
-                  <RefreshCw className={`w-3 h-3 ${syncing ? "animate-spin" : ""}`} />
-                  {syncing ? "Syncing…" : "Sync Gmail"}
-                </Button>
-                <button
-                  onClick={() => setShowSyncOptions(!showSyncOptions)}
-                  className="h-8 px-2 text-xs border border-border rounded-r-lg hover:bg-secondary transition-colors"
-                >
-                  ▾
-                </button>
-              </div>
-              {showSyncOptions && (
-                <div className="absolute right-0 top-10 z-50 bg-card border border-border rounded-xl shadow-xl p-2 w-52 space-y-1">
-                  <button
-                    onClick={() => { handleSync(7); setShowSyncOptions(false); }}
-                    className="w-full text-left text-xs px-3 py-2 rounded-lg hover:bg-secondary transition-colors"
-                  >
-                    🔄 Last 7 days
-                  </button>
-                  <button
-                    onClick={() => { handleSync(30); setShowSyncOptions(false); }}
-                    className="w-full text-left text-xs px-3 py-2 rounded-lg hover:bg-secondary transition-colors"
-                  >
-                    📅 Last 30 days
-                  </button>
-                  <button
-                    onClick={() => { handleSync(90); setShowSyncOptions(false); }}
-                    className="w-full text-left text-xs px-3 py-2 rounded-lg hover:bg-secondary transition-colors"
-                  >
-                    🗓️ Last 90 days
-                  </button>
-                  <div className="h-px bg-border my-1" />
-                  <button
-                    onClick={() => {
-                      if (confirm("This will sync ALL your bank emails (up to 3 years). May take a minute.")) {
-                        handleSyncAll();
-                      }
-                      setShowSyncOptions(false);
-                    }}
-                    className="w-full text-left text-xs px-3 py-2 rounded-lg hover:bg-red-500/10 text-red-500 transition-colors"
-                  >
-                    ⚡ {hasEverSynced ? "Sync all time" : "First-time sync all"}
-                  </button>
-                </div>
-              )}
-            </div>
+
+            {/* Fix 3: Simple sync button — no dropdown, always syncs current month */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleSync()}
+              disabled={syncing}
+              className="gap-1.5 text-xs h-8 rounded-lg"
+            >
+              <RefreshCw className={`w-3 h-3 ${syncing ? "animate-spin" : ""}`} />
+              {syncing ? "Syncing…" : "Sync Gmail"}
+            </Button>
+
             <div className="hidden sm:flex items-center gap-2">
               <Button
                 variant="outline"
@@ -857,10 +811,111 @@ export default function DashboardPage() {
             <div className="flex flex-col gap-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium">Recent Transactions</CardTitle>
+                {/* Fix 4: Show dateFilteredTransactions count */}
                 <span className="text-xs text-muted-foreground">
-                  {searchedTransactions.length} of {transactions.length}
+                  {dateFilteredTransactions.length} of {transactions.length}
                 </span>
               </div>
+
+              {/* Fix 4: Date filter — single date or from/to range */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowDatePicker(!showDatePicker)}
+                  className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+                    dateFilterMode !== "none"
+                      ? "bg-foreground text-background border-foreground"
+                      : "border-border hover:bg-secondary"
+                  }`}
+                >
+                  <Calendar className="w-3 h-3" />
+                  {dateFilterMode === "single" && filterSingleDate
+                    ? format(new Date(filterSingleDate + "T00:00:00"), "dd MMM yyyy")
+                    : dateFilterMode === "range" && filterFromDate && filterToDate
+                    ? `${format(new Date(filterFromDate + "T00:00:00"), "dd MMM")} → ${format(new Date(filterToDate + "T00:00:00"), "dd MMM")}`
+                    : "Filter by date"}
+                  {dateFilterMode !== "none" && (
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDateFilterMode("none");
+                        setFilterSingleDate("");
+                        setFilterFromDate("");
+                        setFilterToDate("");
+                      }}
+                      className="ml-1 hover:text-red-400"
+                    >
+                      ×
+                    </span>
+                  )}
+                </button>
+
+                {showDatePicker && (
+                  <div className="absolute left-0 top-10 z-50 bg-card border border-border rounded-xl shadow-xl p-4 w-72 space-y-3">
+                    {/* Mode toggle */}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => { setDateFilterMode("single"); setFilterFromDate(""); setFilterToDate(""); }}
+                        className={`flex-1 text-xs py-1.5 rounded-lg border transition-colors ${
+                          dateFilterMode === "single" ? "bg-foreground text-background border-foreground" : "border-border hover:bg-secondary"
+                        }`}
+                      >
+                        Single date
+                      </button>
+                      <button
+                        onClick={() => { setDateFilterMode("range"); setFilterSingleDate(""); }}
+                        className={`flex-1 text-xs py-1.5 rounded-lg border transition-colors ${
+                          dateFilterMode === "range" ? "bg-foreground text-background border-foreground" : "border-border hover:bg-secondary"
+                        }`}
+                      >
+                        From → To
+                      </button>
+                    </div>
+
+                    {/* Single date picker */}
+                    {dateFilterMode === "single" && (
+                      <input
+                        type="date"
+                        value={filterSingleDate}
+                        onChange={(e) => { setFilterSingleDate(e.target.value); setShowDatePicker(false); }}
+                        className="w-full text-xs bg-secondary border border-border rounded-lg px-3 py-2 text-foreground"
+                      />
+                    )}
+
+                    {/* Range picker */}
+                    {dateFilterMode === "range" && (
+                      <div className="space-y-2">
+                        <div>
+                          <label className="text-[10px] text-muted-foreground mb-1 block">From</label>
+                          <input
+                            type="date"
+                            value={filterFromDate}
+                            onChange={(e) => setFilterFromDate(e.target.value)}
+                            className="w-full text-xs bg-secondary border border-border rounded-lg px-3 py-2 text-foreground"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-muted-foreground mb-1 block">To</label>
+                          <input
+                            type="date"
+                            value={filterToDate}
+                            onChange={(e) => setFilterToDate(e.target.value)}
+                            className="w-full text-xs bg-secondary border border-border rounded-lg px-3 py-2 text-foreground"
+                          />
+                        </div>
+                        {filterFromDate && filterToDate && (
+                          <button
+                            onClick={() => setShowDatePicker(false)}
+                            className="w-full text-xs py-1.5 bg-foreground text-background rounded-lg"
+                          >
+                            Apply
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <div className="relative">
                 <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                 <input
@@ -918,7 +973,8 @@ export default function DashboardPage() {
               </div>
             ) : transactions.length > 0 ? (
               <div className="divide-y divide-border/50">
-                {searchedTransactions.slice(0, 50).map((t) => {
+                {/* Fix 4: Render dateFilteredTransactions instead of searchedTransactions */}
+                {dateFilteredTransactions.slice(0, 50).map((t) => {
                   const cat = VIBE_CATEGORIES.find((c) => c.id === t.category_id);
                   return (
                     <div key={t.id} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors">
@@ -964,12 +1020,12 @@ export default function DashboardPage() {
                     </div>
                   );
                 })}
-                {searchedTransactions.length > 50 && (
+                {dateFilteredTransactions.length > 50 && (
                   <div className="px-4 py-3 text-xs text-muted-foreground text-center">
-                    Showing 50 of {searchedTransactions.length} — refine your search
+                    Showing 50 of {dateFilteredTransactions.length} — refine your search
                   </div>
                 )}
-                {searchedTransactions.length === 0 && transactions.length > 0 && (
+                {dateFilteredTransactions.length === 0 && transactions.length > 0 && (
                   <div className="py-8 text-center text-sm text-muted-foreground">
                     No transactions match your search
                   </div>
@@ -978,9 +1034,9 @@ export default function DashboardPage() {
             ) : (
               <div className="py-12 text-center">
                 <p className="text-sm text-muted-foreground mb-4">No transactions yet for this month</p>
-                <Button onClick={() => handleSync(90)} disabled={syncing} variant="outline" size="sm" className="gap-2 rounded-lg">
+                <Button onClick={() => handleSync()} disabled={syncing} variant="outline" size="sm" className="gap-2 rounded-lg">
                   <RefreshCw className="w-3.5 h-3.5" />
-                  Sync Last 90 Days
+                  Sync Current Month
                 </Button>
               </div>
             )}
