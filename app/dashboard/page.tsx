@@ -177,8 +177,16 @@ export default function DashboardPage() {
   }, [selectedMonth]);
 
   useEffect(() => {
-    if (session) fetchTransactions();
-  }, [session, fetchTransactions]);
+    if (!session) return;
+    fetchTransactions();
+
+    // Auto-sync once per browser session (not every re-render)
+    const alreadySynced = sessionStorage.getItem("vw_auto_synced");
+    if (!alreadySynced) {
+      sessionStorage.setItem("vw_auto_synced", "1");
+      setTimeout(() => handleSync(), 2000); // slight delay so page loads first
+    }
+  }, [session]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!session?.user?.email) return;

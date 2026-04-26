@@ -120,11 +120,11 @@ const BANK_PATTERNS: BankPattern[] = [
       amount:
         /(?:Rs\.|INR|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
       merchant:
-        /debited from account \d+ to VPA\s+(\S+)\s+([A-Z][A-Za-z0-9\s]{1,39}?)(?:\s+on\s+\d|\.$|$)/i,
+        /(?:debited from account \d+ to VPA\s+(\S+)\s+([A-Z][A-Za-z0-9\s]{1,39}?)(?:\s+on\s+\d|\.$|$))|(?:from NEFT\s+Cr-[^-]+-([A-Z][A-Za-z\s]{2,40})-)/i,
       account: /(?:a\/c|account)\s*(?:no\.?|number)?\s*[Xx*]+(\d{4})/i,
       debit:
         /(?:debited|debit|spent|withdrawn|paid|purchase)/i,
-      credit: /(?:credited|credit|received|refund)/i,
+      credit: /(?:credited|credit|received|refund|successfully added to your account|neft cr)/i,
     },
   },
   {
@@ -279,28 +279,24 @@ export function parseTransactionEmail(
 ): ParsedTransaction | null {
   const text = `${subject}\n${emailBody}`;
 
-  const BALANCE_ALERT_PATTERNS = [
-    /available balance in your account/i,
-    /balance.*has dropped below/i,
-    /balance.*threshold/i,
-    /please note that deposits or credits may take some time to reflect/i,
-    /the balance in your account.*has dropped/i,
-    /reflect in your account/i,
-    /balance as of yesterday/i,
-    /account balance.*alert/i,
-    /your.*balance.*is.*rs\./i,
-    /low balance/i,
-    /minimum.*balance/i,
-    // HDFC specific balance emails
-    /greetings from hdfc bank.*available balance/i,
-    /greetings from hdfc bank.*balance.*dropped/i,
-  ];
-  if (BALANCE_ALERT_PATTERNS.some((p) => p.test(text))) return null;
+  // First check if this email has a REAL transaction
+  const HAS_REAL_TRANSACTION = /(?:has been successfully added to your account|neft cr|neft dr|imps cr|imps dr|rs\..*has been debited|rs\..*debited from account|has been debited from)/i.test(text);
 
-  // Block HDFC balance threshold notifications specifically
-  // Email says "balance dropped below Rs. 5,000" - 5000 is the threshold not a txn
-  const THRESHOLD_PATTERN = /balance.*dropped below\s+Rs\.\s*(?:INR\s*)?([0-9,]+)/i;
-  if (THRESHOLD_PATTERN.test(text)) return null;
+  // Only block pure balance alert emails (no real transaction in them)
+  if (!HAS_REAL_TRANSACTION) {
+    const BALANCE_ALERT_PATTERNS = [
+      /available balance in your account/i,
+      /balance[\s\S]{0,50}has dropped below/i,
+      /balance[\s\S]{0,50}threshold/i,
+      /please note that deposits or credits may take some time to reflect/i,
+      /reflect in your account/i,
+      /balance as of yesterday/i,
+      /greetings from hdfc bank/i,
+      /low balance/i,
+      /minimum.*balance/i,
+    ];
+    if (BALANCE_ALERT_PATTERNS.some((p) => p.test(text))) return null;
+  }
 
   const senderDomain = senderEmail.split("@")[1]?.toLowerCase() || "";
 
@@ -351,11 +347,16 @@ export function parseTransactionEmail(
   let vpa: string | undefined;
 
   if (matchedBank.name === "HDFC Bank" && merchantMatch) {
-    vpa = merchantMatch[1];
-    const rawName = (merchantMatch[2] || "").trim();
-    const isPhoneNumber = /^\d{10}$/.test(rawName.replace(/\s/g, ""));
-    const isMeaningless = rawName.length < 2 || isPhoneNumber;
-    merchant = isMeaningless ? "UPI Payment" : cleanMerchant(rawName);
+    if (merchantMatch[1] && merchantMatch[2]) {
+      // UPI debit: group1=VPA, group2=name
+      vpa = merchantMatch[1];
+      const rawName = merchantMatch[2].trim();
+      const isPhoneNumber = /^\d{10}$/.test(rawName.replace(/\s/g, ""));
+      merchant = (rawName.length < 2 || isPhoneNumber) ? "UPI Payment" : cleanMerchant(rawName);
+    } else if (merchantMatch[3]) {
+      // NEFT credit: group3=sender name e.g. "ZERODHA BROKING LTD"
+      merchant = cleanMerchant(merchantMatch[3]);
+    }
   } else if (merchantMatch) {
     merchant = cleanMerchant(merchantMatch[1] || merchantMatch[2] || "");
   } else {
