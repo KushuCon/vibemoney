@@ -84,9 +84,6 @@ export const BANK_SENDERS = [
   // CRED
   "noreply@cred.club",
   "payments@cred.club",
-  // Zerodha
-  "noreply-cashier@mailer.zerodha.com",
-  "noreply@mailer.zerodha.com",
 ];
 
 // Gmail search query to find transaction emails
@@ -118,7 +115,7 @@ const BANK_PATTERNS: BankPattern[] = [
     senders: ["hdfcbank.net", "hdfcbank.com", "hdfcbank.bank.in"],
     patterns: {
       amount:
-        /(?:Rs\.|INR|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+        /(?:Rs\.(?:INR\s*)?|INR\s*|₹\s*)([0-9,]+(?:\.[0-9]{1,2})?)/i,
       merchant:
         /(?:debited from account \d+ to VPA\s+(\S+)\s+([A-Z][A-Za-z0-9\s]{1,39}?)(?:\s+on\s+\d|\.$|$))|(?:from NEFT\s+Cr-[^-]+-([A-Z][A-Za-z\s]{2,40})-)/i,
       account: /(?:a\/c|account)\s*(?:no\.?|number)?\s*[Xx*]+(\d{4})/i,
@@ -131,7 +128,7 @@ const BANK_PATTERNS: BankPattern[] = [
     name: "SBI",
     senders: ["sbi.co.in"],
     patterns: {
-      amount: /(?:Rs\.|INR|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+      amount: /(?:Rs\.(?:INR\s*)?|INR\s*|₹\s*)([0-9,]+(?:\.[0-9]{1,2})?)/i,
       merchant:
         /(?:at|to|towards|Info:)\s+([A-Z][A-Za-z0-9\s\-&.'*]{2,40})(?:\s+on|\s+via|\.|,|$)/i,
       account: /[Xx*]+(\d{4})/i,
@@ -143,7 +140,7 @@ const BANK_PATTERNS: BankPattern[] = [
     name: "ICICI Bank",
     senders: ["icicibank.com"],
     patterns: {
-      amount: /(?:Rs\.|INR|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+      amount: /(?:Rs\.(?:INR\s*)?|INR\s*|₹\s*)([0-9,]+(?:\.[0-9]{1,2})?)/i,
       merchant:
         /(?:at|to|Info:|merchant:)\s+([A-Z][A-Za-z0-9\s\-&.'*]{2,40})(?:\s+on|\s+Ref|\.|$)/i,
       account: /[Xx*]+(\d{4})/i,
@@ -155,7 +152,7 @@ const BANK_PATTERNS: BankPattern[] = [
     name: "Axis Bank",
     senders: ["axisbank.com"],
     patterns: {
-      amount: /(?:Rs\.|INR|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+      amount: /(?:Rs\.(?:INR\s*)?|INR\s*|₹\s*)([0-9,]+(?:\.[0-9]{1,2})?)/i,
       merchant:
         /(?:at|to|merchant)\s+([A-Z][A-Za-z0-9\s\-&.'*]{2,40})(?:\s+on|\s+via|\.|$)/i,
       account: /[Xx*]+(\d{4})/i,
@@ -167,7 +164,7 @@ const BANK_PATTERNS: BankPattern[] = [
     name: "Kotak Bank",
     senders: ["kotak.com"],
     patterns: {
-      amount: /(?:Rs\.|INR|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+      amount: /(?:Rs\.(?:INR\s*)?|INR\s*|₹\s*)([0-9,]+(?:\.[0-9]{1,2})?)/i,
       merchant:
         /(?:at|to|towards)\s+([A-Z][A-Za-z0-9\s\-&.'*]{2,40})(?:\s+on|\.|$)/i,
       account: /[Xx*]+(\d{4})/i,
@@ -176,21 +173,10 @@ const BANK_PATTERNS: BankPattern[] = [
     },
   },
   {
-    name: "Zerodha",
-    senders: ["mailer.zerodha.com"],
-    patterns: {
-      amount: /(?:₹|Rs\.?|INR)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
-      merchant: /(?:instant payout|withdrawal|payout)/i,
-      account: /account ending with\s+(\d{4})/i,
-      credit: /(?:payout.*processed|deposited to your|instant payout)/i,
-      debit: /(?:funds withdrawn|transfer out)/i,
-    },
-  },
-  {
     name: "UPI/GPay",
     senders: ["google.com", "phonepe.com", "paytm.com", "amazon.in"],
     patterns: {
-      amount: /(?:Rs\.|INR|₹)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+      amount: /(?:Rs\.(?:INR\s*)?|INR\s*|₹\s*)([0-9,]+(?:\.[0-9]{1,2})?)/i,
       merchant:
         /(?:to|from|paid to|received from|sent to)\s+([A-Za-z0-9\s\-&.'@]{2,40})(?:\s+via|\s+on|\.|$)/i,
       debit: /(?:sent|paid|debited|deducted)/i,
@@ -320,22 +306,6 @@ export function parseTransactionEmail(
   const amount = cleanAmount(amountMatch[1]);
   if (amount <= 0) return null;
 
-  // Special case: Zerodha payouts are credits to self
-  if (matchedBank.name === "Zerodha") {
-    const accountMatch = p.account ? text.match(p.account) : null;
-    return {
-      amount,
-      type: "credit",
-      merchant: "Zerodha",
-      description: subject.substring(0, 100),
-      date: extractDate(text, emailDate),
-      account_last4: accountMatch?.[1],
-      raw_subject: subject,
-      email_id: emailId,
-      source: "Zerodha",
-    };
-  }
-
   // Extract transaction type
   const isDebit = p.debit ? p.debit.test(text) : true;
   const isCredit = p.credit ? p.credit.test(text) : false;
@@ -354,7 +324,7 @@ export function parseTransactionEmail(
       const isPhoneNumber = /^\d{10}$/.test(rawName.replace(/\s/g, ""));
       merchant = (rawName.length < 2 || isPhoneNumber) ? "UPI Payment" : cleanMerchant(rawName);
     } else if (merchantMatch[3]) {
-      // NEFT credit: group3=sender name e.g. "ZERODHA BROKING LTD"
+      // NEFT credit: group3=sender name e.g. "BROKERING LTD"
       merchant = cleanMerchant(merchantMatch[3]);
     }
   } else if (merchantMatch) {
