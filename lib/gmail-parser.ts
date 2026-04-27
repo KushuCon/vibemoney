@@ -37,8 +37,8 @@ export function buildGmailQuery(daysBack = 90): string {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function extractAmount(text: string): number {
-  // Handles: Rs.1234 / Rs. 1,234.56 / INR 1234 / ₹1,234 / Rs.INR 16,964.90
-  const match = text.match(/(?:Rs\.(?:INR\s*)?|INR\s*|₹\s*)([0-9,]+(?:\.[0-9]{1,2})?)/i);
+  // Handles: Rs.1234 / Rs. 1,234.56 / Rs. INR 1234 / INR 1234 / ₹1,234 / Rs.INR 16,964.90
+  const match = text.match(/(?:Rs\.\s*(?:INR\s*)?|INR\s*|₹\s*)([0-9,]+(?:\.[0-9]{1,2})?)/i);
   if (!match) return 0;
   return parseFloat(match[1].replace(/,/g, "")) || 0;
 }
