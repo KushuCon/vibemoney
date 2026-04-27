@@ -119,9 +119,9 @@ const BANK_PATTERNS: BankPattern[] = [
     patterns: {
       amount:
         /(?:Rs\.(?:INR\s*)?|INR\s*|₹\s*)([0-9,]+(?:\.[0-9]{1,2})?)/i,
-      // Fix 1: Updated merchant regex to handle UPI debit, UPI credit, and NEFT credit
+      // Handles UPI debit, UPI credit (any account masking format), and NEFT credit
       merchant:
-        /(?:debited from account \d+ to VPA\s+(\S+)\s+([A-Z][A-Za-z0-9\s]{1,39}?)(?:\s+on\s+\d|\.$|$))|(?:credited to your account \*+\d+ by VPA\s+(\S+)\s+([A-Z][A-Za-z0-9\s]{1,39}?)(?:\s+on|\.))|(?:from NEFT\s+Cr-[^-]+-([A-Z][A-Za-z\s]{2,40})-)/i,
+        /(?:debited from account \d+ to VPA\s+(\S+)\s+([A-Z][A-Za-z0-9\s]{1,39}?)(?:\s+on\s+\d|\.$|$))|(?:credited to your account[^b]*?by VPA\s+(\S+)\s+([A-Z][A-Za-z0-9\s]{1,39}?)(?:\s+on|\.))|(?:from NEFT\s+Cr-[^-]+-([A-Z][A-Za-z\s&]{2,40})-)/i,
       account: /(?:a\/c|account)\s*(?:no\.?|number)?\s*[Xx*]+(\d{4})/i,
       debit:
         /(?:debited|debit|spent|withdrawn|paid|purchase)/i,
@@ -282,9 +282,9 @@ export function parseTransactionEmail(
 ): ParsedTransaction | null {
   const text = `${subject}\n${emailBody}`;
 
-  // Fix 1: Proper HAS_REAL_TRANSACTION check — filters balance-only emails
+  // HAS_REAL_TRANSACTION — filters out pure balance-alert emails
   const HAS_REAL_TRANSACTION =
-    /(?:has been successfully added to your account|neft cr|neft dr|imps cr|imps dr|has been debited from|debited from account \d+ to vpa|successfully credited to your account|is successfully credited)/i.test(text);
+    /(?:has been successfully added to your account|neft cr|neft dr|imps cr|imps dr|has been debited from|debited from account \d+ to vpa|successfully credited to your account|is successfully credited to your account|credited to your account[^b]*?by VPA)/i.test(text);
 
   // Pure balance-only emails — skip entirely
   if (!HAS_REAL_TRANSACTION) {
@@ -350,10 +350,22 @@ export function parseTransactionEmail(
   const amount = cleanAmount(amountMatch[1]);
   if (amount <= 0) return null;
 
-  // Extract transaction type
-  const isDebit = p.debit ? p.debit.test(text) : true;
-  const isCredit = p.credit ? p.credit.test(text) : false;
-  const type: "debit" | "credit" = isCredit && !isDebit ? "credit" : "debit";
+  // Extract transaction type — for HDFC, use specific signal phrases first to avoid
+  // false debit when "debited" appears in a credit email's boilerplate
+  let type: "debit" | "credit";
+  if (matchedBank.name === "HDFC Bank") {
+    const isDefiniteCredit = /(?:is successfully credited to your account|has been successfully added to your account|neft cr[- ]|imps cr[- ]|credited to your account[^b]*?by VPA)/i.test(text);
+    const isDefiniteDebit = /(?:debited from account \d+ to VPA|has been debited from your account|neft dr[- ]|imps dr[- ])/i.test(text);
+    if (isDefiniteCredit && !isDefiniteDebit) {
+      type = "credit";
+    } else {
+      type = "debit";
+    }
+  } else {
+    const isDebit = p.debit ? p.debit.test(text) : true;
+    const isCredit = p.credit ? p.credit.test(text) : false;
+    type = isCredit && !isDebit ? "credit" : "debit";
+  }
 
   // Extract merchant + VPA
   const merchantMatch = text.match(p.merchant);
