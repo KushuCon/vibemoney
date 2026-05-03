@@ -1,7 +1,5 @@
 /**
- * GMAIL PARSER — CLEAN & SIMPLE
- * Only parses: HDFC Bank + Zerodha
- * Balance emails: extracts balance but skips as transaction
+ * GMAIL PARSER
  */
 
 export interface ParsedTransaction {
@@ -21,12 +19,26 @@ export interface ParsedBalance {
   balance: number;
   date: string;
   emailId: string;
+  bankName: string;
 }
 
-// Only these 2 senders matter
 export const BANK_SENDERS = [
   "alerts@hdfcbank.bank.in",
   "noreply-cashier@mailer.zerodha.com",
+  // Axis Bank
+  "info@alerts.axisbankmail.in",
+  "info@digital.axisbankmail.com",
+  // SBI / YONO
+  "alerts@sbi.co.in",
+  "noreply@sbi.co.in",
+  // ICICI (likely sender - verify with real email)
+  "alerts@icicibank.com",
+  // Kotak (likely sender - verify with real email)
+  "alerts@kotak.com",
+  // Equitas (confirmed)
+  "esfb-alerts@equitasbank.com",
+  // Groww (likely sender - verify with real email)
+  "no-reply@groww.in",
 ];
 
 export function buildGmailQuery(daysBack = 90): string {
@@ -74,6 +86,18 @@ function clean(raw: string): string {
   return raw.trim().replace(/\s+/g, " ").replace(/[*]+/g, "").substring(0, 60);
 }
 
+function detectBank(sender: string): string {
+  if (sender.includes("hdfcbank")) return "HDFC Bank";
+  if (sender.includes("axisbankmail")) return "Axis Bank";
+  if (sender.includes("sbi.co.in")) return "SBI";
+  if (sender.includes("icicibank")) return "ICICI Bank";
+  if (sender.includes("kotak")) return "Kotak Bank";
+  if (sender.includes("equitasbank")) return "Equitas Bank";
+  if (sender.includes("zerodha")) return "Zerodha";
+  if (sender.includes("groww")) return "Groww";
+  return "Unknown Bank";
+}
+
 // ─── BALANCE PARSER ───────────────────────────────────────────────────────────
 // Extracts real balance from ANY HDFC email that mentions it.
 // Returns null if no balance found.
@@ -81,27 +105,30 @@ export function parseBalanceAlert(
   emailBody: string,
   subject: string,
   emailId: string,
-  emailDate: string
+  emailDate: string,
+  senderEmail: string
 ): ParsedBalance | null {
   const text = `${subject}\n${emailBody}`;
   const lower = text.toLowerCase();
-
   if (!lower.includes("balance")) return null;
 
-  // For the "dropped below threshold" email:
-  // "Balance as of yesterday: Rs. INR 445.00" — this is the REAL balance, use it
   const patterns = [
     /[Bb]alance as of yesterday:\s*Rs\.\s*(?:INR\s*)?([0-9,]+(?:\.[0-9]{1,2})?)/i,
     /available balance in your account[^i]*is\s+Rs\.\s*(?:INR\s*)?([0-9,]+(?:\.[0-9]{1,2})?)/i,
     /available balance[^:]*:\s*(?:Rs\.?|INR|₹)\s*(?:INR\s*)?([0-9,]+(?:\.[0-9]{1,2})?)/i,
     /[Tt]he available balance in your account is Rs\.\s*(?:INR\s*)?([0-9,]+(?:\.[0-9]{1,2})?)/i,
+    /[Aa]vailable [Bb]alance[:\s]+(?:INR\s*|Rs\.?\s*)?([0-9,]+(?:\.[0-9]{1,2})?)/i,
+    /[Yy]our available balance is\s+(?:Rs\.?\s*|INR\s*)?([0-9,]+(?:\.[0-9]{1,2})?)/i,
   ];
 
   for (const p of patterns) {
     const m = text.match(p);
     if (m) {
       const balance = parseFloat(m[1].replace(/,/g, ""));
-      if (balance >= 0) return { balance, date: emailDate, emailId };
+      if (balance >= 0) {
+        const bankName = detectBank(senderEmail.toLowerCase());
+        return { balance, date: emailDate, emailId, bankName };
+      }
     }
   }
   return null;
@@ -118,103 +145,217 @@ export function parseTransactionEmail(
   const text = `${subject}\n${emailBody}`;
   const lower = text.toLowerCase();
   const sender = senderEmail.toLowerCase();
+  // ── AXIS BANK ─────────────────────────────────────────────────────────────
+  if (sender.includes("axisbankmail")) {
+    const isDebit = lower.includes("debited") || lower.includes("debit");
+    const isCredit = lower.includes("credited") || lower.includes("credit");
+    if (!isDebit && !isCredit) return null;
+    const amount = extractAmount(text);
+    if (amount <= 0) return null;
 
-  // ── ZERODHA ───────────────────────────────────────────────────────────────
-  if (sender.includes("zerodha.com")) {
-    // Only process payout emails (money coming INTO bank)
-    if (!lower.includes("instant payout") && !lower.includes("deposited to your primary bank")) {
+    let merchant = "Unknown";
+    let vpa: string | undefined;
+    const upiM = text.match(/(?:at|to)\s+([A-Z][A-Za-z0-9\s&.]{1,40}?)(?:\s+on\s|\s+via\s|\.)/i);
+    const vpaM = text.match(/VPA[:\s]+(\S+)/i);
+    if (vpaM) vpa = vpaM[1];
+    if (upiM) merchant = clean(upiM[1]);
+
+    return {
+      amount,
+      type: isDebit ? "debit" : "credit",
+      merchant: merchant || (isDebit ? "Axis Debit" : "Axis Credit"),
+      description: subject.substring(0, 100),
+      date: extractDate(text, emailDate),
+      account_last4: text.match(/[Xx*]{2,}(\d{4})/)?.[1],
+      raw_subject: subject,
+      email_id: emailId,
+      source: "Axis Bank",
+      vpa,
+    };
+  }
+
+  // ── SBI ───────────────────────────────────────────────────────────────────
+  if (sender.includes("sbi.co.in")) {
+    const isDebit = lower.includes("debited") || lower.includes("withdrawn");
+    const isCredit = lower.includes("credited") || lower.includes("deposited");
+    if (!isDebit && !isCredit) return null;
+    const amount = extractAmount(text);
+    if (amount <= 0) return null;
+
+    let merchant = "SBI Transfer";
+    let vpa: string | undefined;
+    const vpaM = text.match(/(?:to|from)\s+VPA\s+(\S+)/i);
+    if (vpaM) { vpa = vpaM[1]; merchant = vpa; }
+    const neftM = text.match(/(?:NEFT|IMPS)[^-]*-[^-]*-([A-Z][A-Za-z\s&.]{2,40})/i);
+    if (neftM) merchant = clean(neftM[1]);
+
+    return {
+      amount,
+      type: isDebit ? "debit" : "credit",
+      merchant,
+      description: subject.substring(0, 100),
+      date: extractDate(text, emailDate),
+      account_last4: text.match(/[Xx*]{2,}(\d{4})/)?.[1]
+        || text.match(/[Aa]\/c\s*(?:no\.?\s*)?[Xx*]*(\d{4})/i)?.[1],
+      raw_subject: subject,
+      email_id: emailId,
+      source: "SBI",
+      vpa,
+    };
+  }
+
+  // ── EQUITAS BANK ──────────────────────────────────────────────────────────
+  if (sender.includes("equitasbank")) {
+    const isDebit = lower.includes("debited") || lower.includes("debit");
+    const isCredit = lower.includes("credited") || lower.includes("credit");
+    if (!isDebit && !isCredit) return null;
+    const amount = extractAmount(text);
+    if (amount <= 0) return null;
+    const vpaM = text.match(/(?:to|from)\s+VPA\s+(\S+)/i);
+    return {
+      amount,
+      type: isDebit ? "debit" : "credit",
+      merchant: vpaM?.[1] || (isDebit ? "Equitas Debit" : "Equitas Credit"),
+      description: subject.substring(0, 100),
+      date: extractDate(text, emailDate),
+      account_last4: text.match(/[Xx*]{2,}(\d{4})/)?.[1],
+      raw_subject: subject,
+      email_id: emailId,
+      source: "Equitas Bank",
+      vpa: vpaM?.[1],
+    };
+  }
+
+  // ── ICICI BANK ────────────────────────────────────────────────────────────
+  if (sender.includes("icicibank")) {
+    const isDebit = lower.includes("debited");
+    const isCredit = lower.includes("credited");
+    if (!isDebit && !isCredit) return null;
+    const amount = extractAmount(text);
+    if (amount <= 0) return null;
+    let merchant = isDebit ? "ICICI Debit" : "ICICI Credit";
+    let vpa: string | undefined;
+    const vpaM = text.match(/(?:at|to)\s+([A-Za-z0-9@._-]{3,50})\s+on\s/i);
+    if (vpaM) { merchant = clean(vpaM[1]); if (vpaM[1].includes("@")) vpa = vpaM[1]; }
+    return {
+      amount,
+      type: isDebit ? "debit" : "credit",
+      merchant,
+      description: subject.substring(0, 100),
+      date: extractDate(text, emailDate),
+      account_last4: text.match(/[Xx*]{2,}(\d{4})/)?.[1],
+      raw_subject: subject,
+      email_id: emailId,
+      source: "ICICI Bank",
+      vpa,
+    };
+  }
+
+  // ── KOTAK BANK ────────────────────────────────────────────────────────────
+  if (sender.includes("kotak")) {
+    const isDebit = lower.includes("debited");
+    const isCredit = lower.includes("credited");
+    if (!isDebit && !isCredit) return null;
+    const amount = extractAmount(text);
+    if (amount <= 0) return null;
+    const vpaM = text.match(/(?:to|from)\s+VPA\s+(\S+)/i);
+    let merchant = vpaM?.[1] || (isDebit ? "Kotak Debit" : "Kotak Credit");
+    return {
+      amount,
+      type: isDebit ? "debit" : "credit",
+      merchant: clean(merchant),
+      description: subject.substring(0, 100),
+      date: extractDate(text, emailDate),
+      account_last4: text.match(/[Xx*]{2,}(\d{4})/)?.[1],
+      raw_subject: subject,
+      email_id: emailId,
+      source: "Kotak Bank",
+      vpa: vpaM?.[1],
+    };
+  }
+
+  // ── GROWW ─────────────────────────────────────────────────────────────────
+  if (sender.includes("groww")) {
+    if (!lower.includes("withdrawal") && !lower.includes("credited") && !lower.includes("payout")) {
       return null;
     }
     const amount = extractAmount(text);
     if (amount <= 0) return null;
-
     return {
       amount,
       type: "credit",
-      merchant: "Zerodha Payout",
+      merchant: "Groww Payout",
       description: subject.substring(0, 100),
       date: extractDate(text, emailDate),
-      account_last4: text.match(/account ending with\s+(\d{4})/i)?.[1],
+      account_last4: text.match(/[Xx*]{2,}(\d{4})/)?.[1],
       raw_subject: subject,
       email_id: emailId,
-      source: "Zerodha",
+      source: "Groww",
     };
   }
 
   // ── HDFC BANK ─────────────────────────────────────────────────────────────
   if (!sender.includes("hdfcbank")) return null;
 
-  // SKIP: balance-only / threshold / promotional emails (no real transaction)
-  // These have "threshold" or "dropped below" or "minimum balance" etc.
-  // but do NOT have debit/credit transaction phrases.
   const isRealTransaction =
-    lower.includes("is successfully credited to your account") ||
-    lower.includes("successfully credited to your account") ||
-    lower.includes("successfully added to your account") ||
+    lower.includes("has been successfully added to your account") ||
     lower.includes("neft cr") ||
     lower.includes("neft dr") ||
     lower.includes("imps cr") ||
     lower.includes("imps dr") ||
-    lower.includes("debited from account") ||
-    lower.includes("has been debited");
+    lower.includes("rs..*has been debited") ||
+    lower.includes("rs..*debited from account") ||
+    lower.includes("has been debited from");
 
-  if (!isRealTransaction) return null; // balance alerts, low balance, promo — all skipped
+  if (!isRealTransaction) {
+    const BALANCE_ALERT_PATTERNS = [
+      /available balance in your account/i,
+      /balance[\s\S]{0,50}has dropped below/i,
+      /balance[\s\S]{0,50}threshold/i,
+      /please note that deposits or credits may take some time to reflect/i,
+      /reflect in your account/i,
+      /balance as of yesterday/i,
+      /greetings from hdfc bank/i,
+      /low balance/i,
+      /minimum.*balance/i,
+    ];
+    if (BALANCE_ALERT_PATTERNS.some((p) => p.test(text))) return null;
+  }
 
   const amount = extractAmount(text);
   if (amount <= 0) return null;
 
-  // ── Credit vs Debit ───────────────────────────────────────────────────────
   const isCredit =
-    lower.includes("is successfully credited to your account") ||
-    lower.includes("successfully credited to your account") ||
-    lower.includes("successfully added to your account") ||
+    lower.includes("has been successfully added to your account") ||
     lower.includes("neft cr") ||
     lower.includes("imps cr");
 
   const type: "debit" | "credit" = isCredit ? "credit" : "debit";
 
-  // ── Merchant name ─────────────────────────────────────────────────────────
   let merchant = "Unknown";
   let vpa: string | undefined;
-
-  if (type === "credit") {
-    if (lower.includes("by vpa")) {
-      // UPI credit: "credited to your account **1745 by VPA skp@okhdfcbank SACHIN CONSUL on"
-      const m = text.match(/by VPA\s+(\S+)\s+([A-Z][A-Za-z0-9\s]{1,40}?)(?:\s+on\s|\.|$)/i);
-      if (m) {
-        vpa = m[1];
-        merchant = clean(m[2]) || "UPI Credit";
-      } else {
-        merchant = "UPI Credit";
-      }
-    } else if (lower.includes("neft cr") || lower.includes("successfully added to your account")) {
-      // NEFT credit: "from NEFT Cr-YESB0000001-ZERODHA BROKING LTD-DSCNB"
-      const m = text.match(/NEFT\s+Cr-[^-]+-([A-Z][A-Za-z\s&.]{2,50})-/i);
-      if (m) {
-        merchant = clean(m[1]);
-      } else {
-        // Fallback: try to grab sender name from the body
-        const m2 = text.match(/from\s+([A-Z][A-Za-z\s&.]{2,40})(?:\s+on|\s*\.)/i);
-        merchant = m2 ? clean(m2[1]) : "NEFT Credit";
-      }
-    } else {
-      merchant = "Bank Credit";
-    }
+  const merchantMatch = text.match(/(?:debited from account \d+ to VPA\s+(\S+)\s+([A-Z][A-Za-z0-9\s]{1,39}?)(?:\s+on\s+\d|\.$|$))|(?:from NEFT\s+Cr-[^-]+-([A-Z][A-Za-z\s]{2,40})-)/i);
+  if (merchantMatch && merchantMatch[1] && merchantMatch[2]) {
+    vpa = merchantMatch[1];
+    const rawName = merchantMatch[2].trim();
+    const isPhoneNumber = /^\d{10}$/.test(rawName.replace(/\s/g, ""));
+    merchant = (rawName.length < 2 || isPhoneNumber) ? "UPI Payment" : clean(rawName);
+  } else if (merchantMatch && merchantMatch[3]) {
+    merchant = clean(merchantMatch[3]);
+  } else if (type === "credit") {
+    merchant = lower.includes("neft cr") ? "NEFT Credit" : "Bank Credit";
   } else {
-    // Debit — UPI: "debited from account 1234 to VPA merchant@upi MERCHANT NAME on"
     const m = text.match(/to VPA\s+(\S+)\s+([A-Z][A-Za-z0-9\s]{1,40}?)(?:\s+on\s|\.|$)/i);
     if (m) {
       vpa = m[1];
       const name = m[2].trim();
-      // If it looks like a 10-digit phone number, use generic label
       merchant = /^\d{10}$/.test(name.replace(/\s/g, "")) ? "UPI Payment" : clean(name);
     } else {
       merchant = "UPI Payment";
     }
   }
 
-  const acct = text.match(/(?:a\/c|account)[^0-9]*[Xx*]+(\d{4})/i)
-    || text.match(/[Xx*]{2,}(\d{4})/);
+  const acct = text.match(/(?:a\/c|account)[^0-9]*[Xx*]+(\d{4})/i) || text.match(/[Xx*]{2,}(\d{4})/);
 
   return {
     amount,

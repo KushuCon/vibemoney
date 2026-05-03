@@ -166,29 +166,32 @@ export async function POST(req: NextRequest) {
           senderEmail
         );
 
-        const balanceParsed = parseBalanceAlert(body, subject, msg.id, emailDate);
+        const balanceParsed = parseBalanceAlert(body, subject, msg.id, emailDate, senderEmail);
         if (balanceParsed) {
           const balanceIso = dateHeader
             ? new Date(dateHeader).toISOString()
             : new Date(emailDate).toISOString();
-          const { data: userData } = await supabaseAdmin
-            .from("users")
-            .select("balance_updated_at")
-            .eq("email", session.user?.email)
-            .single();
 
-          const prevUpdatedAt = userData?.balance_updated_at
-            ? new Date(userData.balance_updated_at).toISOString()
-            : null;
+          const { data: existing } = await supabaseAdmin
+            .from("bank_balances")
+            .select("updated_at")
+            .eq("user_email", session.user?.email)
+            .eq("bank_name", balanceParsed.bankName)
+            .single()
+            .catch(() => ({ data: null }));
 
-          if (!prevUpdatedAt || balanceIso > prevUpdatedAt) {
+          if (!existing || balanceIso > new Date(existing.updated_at).toISOString()) {
             await supabaseAdmin
-              .from("users")
-              .update({
-                bank_balance: balanceParsed.balance,
-                balance_updated_at: balanceIso,
-              })
-              .eq("email", session.user?.email);
+              .from("bank_balances")
+              .upsert(
+                {
+                  user_email: session.user?.email,
+                  bank_name: balanceParsed.bankName,
+                  balance: balanceParsed.balance,
+                  updated_at: balanceIso,
+                },
+                { onConflict: "user_email,bank_name" }
+              );
           }
         }
 

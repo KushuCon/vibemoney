@@ -136,6 +136,7 @@ export default function DashboardPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterCategory, setFilterCategory] = useState("all");
   const [filterType, setFilterType] = useState<"all" | "debit" | "credit">("all");
+  const [filterBank, setFilterBank] = useState("all");
   // Fix 3: Removed showSyncOptions state
   const [hasEverSynced, setHasEverSynced] = useState(false);
   const [showWrapped, setShowWrapped] = useState(false);
@@ -147,8 +148,8 @@ export default function DashboardPage() {
     return localStorage.getItem("theme") === "dark";
   });
   const [budget, setBudget] = useState<number | null>(null);
-  const [bankBalance, setBankBalance] = useState<number | null>(null);
-  const [balanceUpdatedAt, setBalanceUpdatedAt] = useState<string | null>(null);
+  const [bankBalances, setBankBalances] = useState<{bank_name: string, balance: number, updated_at: string}[]>([]);
+  const [primaryBank, setPrimaryBank] = useState<string | null>(null);
   const [budgetLoaded, setBudgetLoaded] = useState(false);
   const [showBudgetModal, setShowBudgetModal] = useState(false);
   const [budgetInput, setBudgetInput] = useState("");
@@ -205,16 +206,8 @@ export default function DashboardPage() {
         } else {
           setBudget(null);
         }
-        if (d.balance !== null && d.balance !== undefined) {
-          setBankBalance(Number(d.balance));
-        } else {
-          setBankBalance(null);
-        }
-        if (d.balanceUpdatedAt) {
-          setBalanceUpdatedAt(d.balanceUpdatedAt);
-        } else {
-          setBalanceUpdatedAt(null);
-        }
+        setBankBalances(d.bankBalances ?? []);
+        setPrimaryBank(d.primaryBank ?? null);
         setHasEverSynced(!!d.syncFromDate);
       })
       .catch(() => setBudget(null))
@@ -379,9 +372,11 @@ export default function DashboardPage() {
     new Set(transactions.map((t) => t.account_last4).filter(Boolean))
   ) as string[];
 
-  const filteredTransactions = selectedAccount === "all"
-    ? transactions
-    : transactions.filter((t) => t.account_last4 === selectedAccount);
+  const filteredTransactions = transactions.filter((t) => {
+    const matchesAccount = selectedAccount === "all" || t.account_last4 === selectedAccount;
+    const matchesBank = filterBank === "all" || t.source === filterBank;
+    return matchesAccount && matchesBank;
+  });
 
   const searchedTransactions = filteredTransactions.filter((t) => {
     const matchesSearch =
@@ -646,29 +641,65 @@ export default function DashboardPage() {
                   </div>
                 </CardContent>
               </Card>
-              <Card className="rounded-xl border-border/60">
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs text-muted-foreground">Bank Balance</span>
-                    <span className="text-base">🏦</span>
-                  </div>
-                  {bankBalance !== null ? (
-                    <>
-                      <div className="text-xl font-bold tracking-tight">{formatINR(bankBalance)}</div>
-                      <div className="text-xs text-muted-foreground mt-1">
-                        updated {balanceUpdatedAt
-                          ? format(new Date(balanceUpdatedAt), "dd MMM, h:mm a")
-                          : "recently"}
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="text-xl font-bold tracking-tight text-muted-foreground">—</div>
-                      <div className="text-xs text-muted-foreground mt-1">sync to detect</div>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
+              {/* Per-bank balance cards */}
+              {bankBalances.length === 0 ? (
+                <Card className="rounded-xl border-border/60">
+                  <CardContent className="p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-muted-foreground">Bank Balance</span>
+                      <span className="text-base">🏦</span>
+                    </div>
+                    <div className="text-xl font-bold tracking-tight text-muted-foreground">—</div>
+                    <div className="text-xs text-muted-foreground mt-1">sync to detect</div>
+                  </CardContent>
+                </Card>
+              ) : bankBalances.length === 1 ? (
+                <Card className="rounded-xl border-border/60">
+                  <CardContent className="p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-muted-foreground">{bankBalances[0].bank_name}</span>
+                      <span className="text-base">🏦</span>
+                    </div>
+                    <div className="text-xl font-bold tracking-tight">{formatINR(bankBalances[0].balance)}</div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      updated {format(new Date(bankBalances[0].updated_at), "dd MMM, h:mm a")}
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : (
+                <Card className="rounded-xl border-border/60 col-span-2">
+                  <CardContent className="p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-xs text-muted-foreground">Bank Balances 🏦</span>
+                      <select
+                        value={primaryBank ?? bankBalances[0].bank_name}
+                        onChange={async (e) => {
+                          setPrimaryBank(e.target.value);
+                          await fetch("/api/budget", {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ primaryBank: e.target.value }),
+                          });
+                        }}
+                        className="text-xs bg-secondary border border-border rounded-lg px-2 py-1 text-foreground cursor-pointer"
+                      >
+                        {bankBalances.map((b) => (
+                          <option key={b.bank_name} value={b.bank_name}>★ {b.bank_name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      {bankBalances.map((b) => (
+                        <div key={b.bank_name} className={`p-2 rounded-lg ${(primaryBank ?? bankBalances[0].bank_name) === b.bank_name ? "bg-primary/5 border border-primary/20" : "bg-muted/30"}`}>
+                          <div className="text-xs text-muted-foreground mb-1">{b.bank_name}</div>
+                          <div className="text-base font-bold">{formatINR(b.balance)}</div>
+                          <div className="text-xs text-muted-foreground">{format(new Date(b.updated_at), "dd MMM")}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
             </>
           )}
         </div>
@@ -953,6 +984,18 @@ export default function DashboardPage() {
                   </button>
                 ))}
                 <div className="h-3 w-px bg-border" />
+                {Array.from(new Set(transactions.map((t) => t.source))).length > 1 && (
+                  <select
+                    value={filterBank}
+                    onChange={(e) => setFilterBank(e.target.value)}
+                    className="text-xs bg-secondary border border-border rounded-lg px-2 py-1.5 text-foreground cursor-pointer h-8"
+                  >
+                    <option value="all">All Banks</option>
+                    {Array.from(new Set(transactions.map((t) => t.source))).map((src) => (
+                      <option key={src} value={src}>{src}</option>
+                    ))}
+                  </select>
+                )}
                 <select
                   value={filterCategory}
                   onChange={(e) => setFilterCategory(e.target.value)}
