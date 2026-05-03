@@ -172,15 +172,14 @@ export async function POST(req: NextRequest) {
             ? new Date(dateHeader).toISOString()
             : new Date(emailDate).toISOString();
 
-          const { data: existing } = await supabaseAdmin
+          const { data: existing, error: existingError } = await supabaseAdmin
             .from("bank_balances")
             .select("updated_at")
             .eq("user_email", session.user?.email)
             .eq("bank_name", balanceParsed.bankName)
-            .single()
-            .catch(() => ({ data: null }));
+            .single();
 
-          if (!existing || balanceIso > new Date(existing.updated_at).toISOString()) {
+          if (!existingError && (!existing || balanceIso > new Date(existing.updated_at).toISOString())) {
             await supabaseAdmin
               .from("bank_balances")
               .upsert(
