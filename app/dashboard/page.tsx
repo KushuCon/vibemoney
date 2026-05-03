@@ -487,23 +487,27 @@ export default function DashboardPage() {
               {syncing ? "Syncing…" : "Sync Gmail"}
             </Button>
 
-            <div className="hidden sm:flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleExportPDF}
-                disabled={transactions.length === 0}
-                className="gap-1.5 text-xs h-8 rounded-lg"
-              >
-                ⬇️ Export PDF
-              </Button>
-              <button
-                onClick={() => setIsDark(!isDark)}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-secondary transition-colors"
-              >
-                {isDark ? "☀️ Light" : "🌙 Dark"}
-              </button>
-            </div>
+            {/* Export PDF — icon only on mobile, text on sm+ */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleExportPDF}
+              disabled={transactions.length === 0}
+              className="gap-1.5 text-xs h-8 rounded-lg"
+              title="Export PDF"
+            >
+              <span className="sm:hidden">⬇️</span>
+              <span className="hidden sm:inline">⬇️ Export PDF</span>
+            </Button>
+            {/* Dark/light toggle — icon only on mobile */}
+            <button
+              onClick={() => setIsDark(!isDark)}
+              className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-secondary transition-colors"
+              title={isDark ? "Switch to light" : "Switch to dark"}
+            >
+              <span>{isDark ? "☀️" : "🌙"}</span>
+              <span className="hidden sm:inline">{isDark ? " Light" : " Dark"}</span>
+            </button>
             <Button
               variant="ghost"
               size="icon"
