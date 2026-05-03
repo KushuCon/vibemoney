@@ -52,7 +52,17 @@ function extractDate(text: string, fallback: string): string {
     const m = text.match(p);
     if (m) {
       try {
-        const d = new Date(m[1]);
+        const raw = m[1];
+        // Handle DD-MM-YY or DD-MM-YYYY (Indian bank format)
+        const ddmmMatch = raw.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})$/);
+        if (ddmmMatch) {
+          let [, dd, mm, yy] = ddmmMatch;
+          const yyyy = yy.length === 2 ? `20${yy}` : yy;
+          const d = new Date(`${yyyy}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}`);
+          if (!isNaN(d.getTime()) && d <= new Date()) return d.toISOString().split("T")[0];
+        }
+        // Fallback for month-name formats
+        const d = new Date(raw);
         if (!isNaN(d.getTime()) && d <= new Date()) return d.toISOString().split("T")[0];
       } catch {}
     }
