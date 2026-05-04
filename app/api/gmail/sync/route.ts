@@ -179,14 +179,17 @@ export async function POST(req: NextRequest) {
             ? new Date(dateHeader).toISOString()
             : new Date(emailDate).toISOString();
 
-          const { data: existing, error: existingError } = await supabaseAdmin
+          const { data: existingBalance, error: balanceError } = await supabaseAdmin
             .from("bank_balances")
             .select("updated_at")
             .eq("user_email", session.user?.email)
             .eq("bank_name", balanceParsed.bankName)
             .single();
 
-          if (!existingError && (!existing || balanceIso > new Date(existing.updated_at).toISOString())) {
+          // PGRST116 = no rows found (first time seeing this bank) — that's fine, upsert it
+          const noRow = balanceError?.code === "PGRST116";
+          const isNewer = !existingBalance || balanceIso > new Date(existingBalance.updated_at).toISOString();
+          if (noRow || isNewer) {
             await supabaseAdmin
               .from("bank_balances")
               .upsert(
