@@ -11,7 +11,7 @@ export async function GET() {
 
   const { data, error } = await supabaseAdmin
     .from("users")
-    .select("monthly_budget, sync_from_date, primary_bank")
+    .select("monthly_budget, sync_from_date, primary_bank, onboarding_done")
     .eq("email", session.user.email)
     .single();
 
@@ -30,6 +30,7 @@ export async function GET() {
     bankBalances: bankBalances ?? [],
     syncFromDate: data?.sync_from_date ?? null,
     primaryBank: data?.primary_bank ?? null,
+    onboardingDone: data?.onboarding_done ?? false,
   });
 }
 
@@ -58,10 +59,13 @@ export async function PATCH(req: NextRequest) {
   if (!session?.user?.email) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
-  const { primaryBank } = await req.json();
+  const { primaryBank, onboardingDone } = await req.json();
+  const update: Record<string, unknown> = {};
+  if (primaryBank !== undefined) update.primary_bank = primaryBank;
+  if (onboardingDone !== undefined) update.onboarding_done = onboardingDone;
   await supabaseAdmin
     .from("users")
-    .update({ primary_bank: primaryBank })
+    .update(update)
     .eq("email", session.user.email);
   return NextResponse.json({ success: true });
 }

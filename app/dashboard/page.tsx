@@ -136,7 +136,6 @@ export default function DashboardPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterCategory, setFilterCategory] = useState("all");
   const [filterType, setFilterType] = useState<"all" | "debit" | "credit">("all");
-  const [filterBank, setFilterBank] = useState("all");
   // Fix 3: Removed showSyncOptions state
   const [hasEverSynced, setHasEverSynced] = useState(false);
   const [showWrapped, setShowWrapped] = useState(false);
@@ -161,6 +160,31 @@ export default function DashboardPage() {
   const [filterFromDate, setFilterFromDate] = useState("");
   const [filterToDate, setFilterToDate] = useState("");
   const [showDatePicker, setShowDatePicker] = useState(false);
+
+  // Feature states
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState(1);
+  const [onboardingDone, setOnboardingDone] = useState(true);
+  const [splits, setSplits] = useState<{
+    id: string;
+    split_with_name: string;
+    amount_owed: number;
+    settled: boolean;
+    transactions: { merchant: string; amount: number };
+  }[]>([]);
+  const [showSplits, setShowSplits] = useState(false);
+  const [splitTxn, setSplitTxn] = useState<Transaction | null>(null);
+  const [splitName, setSplitName] = useState("");
+  const [splitAmount, setSplitAmount] = useState("");
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [filterBank, setFilterBank] = useState("all");
+  const [compareStats, setCompareStats] = useState<{
+    category_id: string;
+    category_name: string;
+    avg_spend: number;
+  }[]>([]);
+  const [showChallenge, setShowChallenge] = useState(false);
+  const [challengeTarget, setChallengeTarget] = useState("");
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
@@ -209,6 +233,8 @@ export default function DashboardPage() {
         setBankBalances(d.bankBalances ?? []);
         setPrimaryBank(d.primaryBank ?? null);
         setHasEverSynced(!!d.syncFromDate);
+        setOnboardingDone(!!d.onboardingDone);
+        if (!d.onboardingDone && !d.syncFromDate) setShowOnboarding(true);
       })
       .catch(() => setBudget(null))
       .finally(() => setBudgetLoaded(true));
@@ -219,6 +245,17 @@ export default function DashboardPage() {
       setShowBudgetModal(true);
     }
   }, [session, loading, budgetLoaded, transactions.length, budget, dismissedBudgetPrompt]);
+
+  useEffect(() => {
+    if (!session?.user?.email) return;
+    // Load splits
+    fetch("/api/splits").then((r) => r.json()).then(setSplits).catch(() => {});
+    // Load compare stats
+    fetch(`/api/stats/compare?month=${selectedMonth}`)
+      .then((r) => r.json()).then(setCompareStats).catch(() => {});
+    // Check push permission
+    if ("Notification" in window) setPushEnabled(Notification.permission === "granted");
+  }, [session, selectedMonth]);
 
   // Fix 3: handleSync — always syncs current month only, no dropdown
   const handleSync = async () => {
@@ -367,6 +404,68 @@ export default function DashboardPage() {
     }
   };
 
+  const enablePush = async () => {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      alert("Push notifications not supported on this browser.");
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") return;
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY as unknown as BufferSource,
+    });
+    const json = sub.toJSON();
+    await fetch("/api/push", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        endpoint: json.endpoint,
+        p256dh: (json.keys as Record<string, string>)?.p256dh,
+        auth: (json.keys as Record<string, string>)?.auth,
+      }),
+    });
+    setPushEnabled(true);
+  };
+
+  const addSplit = async () => {
+    if (!splitTxn || !splitName || !splitAmount) return;
+    const res = await fetch("/api/splits", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        transaction_id: splitTxn.id,
+        split_with_name: splitName,
+        amount_owed: Number(splitAmount),
+      }),
+    });
+    const newSplit = await res.json();
+    setSplits((prev) => [newSplit, ...prev]);
+    setSplitTxn(null);
+    setSplitName("");
+    setSplitAmount("");
+  };
+
+  const settleSplit = async (id: string) => {
+    await fetch("/api/splits", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    setSplits((prev) => prev.filter((s) => s.id !== id));
+  };
+
+  const completeOnboarding = async () => {
+    setShowOnboarding(false);
+    setOnboardingDone(true);
+    await fetch("/api/budget", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ onboardingDone: true }),
+    });
+  };
+
   // ── Computed stats ──────────────────────────────────────────────────────────
   const accounts = Array.from(
     new Set(transactions.map((t) => t.account_last4).filter(Boolean))
@@ -445,6 +544,62 @@ export default function DashboardPage() {
   const formatINR = (n: number) =>
     new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n);
 
+  // Feature 1: Spend forecast
+  const today = new Date();
+  const dayOfMonth = today.getDate();
+  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+  const isCurrentMonth = selectedMonth === format(today, "yyyy-MM");
+  const projectedSpend = isCurrentMonth && dayOfMonth > 0
+    ? Math.round((totalSpent / dayOfMonth) * daysInMonth)
+    : null;
+  const forecastPercent = projectedSpend && budget ? Math.min((projectedSpend / budget) * 100, 100) : null;
+
+  // Feature 3: Recurring spend detector
+  const recurringMerchants = (() => {
+    const merchantMonths: Record<string, Set<string>> = {};
+    for (const t of transactions) {
+      if (t.type !== "debit") continue;
+      const m = t.merchant.toLowerCase();
+      const mo = t.date.substring(0, 7);
+      if (!merchantMonths[m]) merchantMonths[m] = new Set();
+      merchantMonths[m].add(mo);
+    }
+    return Object.entries(merchantMonths)
+      .filter(([, months]) => months.size >= 2)
+      .map(([merchant]) => {
+        const txns = transactions.filter((t) => t.merchant.toLowerCase() === merchant && t.type === "debit");
+        const latest = [...txns].sort((a, b) => b.date.localeCompare(a.date))[0];
+        return {
+          merchant: latest.merchant,
+          avg: Math.round(txns.reduce((s, t) => s + t.amount, 0) / txns.length),
+          emoji: latest.category_emoji,
+          months: merchantMonths[merchant].size,
+        };
+      })
+      .sort((a, b) => b.avg - a.avg)
+      .slice(0, 5);
+  })();
+
+  // Feature 5: No-spend streak
+  const noSpendStreak = (() => {
+    let streak = 0;
+    const d = new Date();
+    while (streak < 30) {
+      const dateStr = format(d, "yyyy-MM-dd");
+      const hadSpend = filteredDebits.some((t) => t.date === dateStr);
+      if (hadSpend) break;
+      streak++;
+      d.setDate(d.getDate() - 1);
+    }
+    return streak;
+  })();
+
+  // Feature 8: Broke mode
+  const primaryBalance = bankBalances?.length > 0
+    ? bankBalances.find((b) => b.bank_name === primaryBank)?.balance ?? bankBalances[0]?.balance
+    : null;
+  const isBrokeMode = primaryBalance !== null && primaryBalance !== undefined && primaryBalance < 500;
+
   if (status === "loading") return null;
 
   return (
@@ -520,6 +675,17 @@ export default function DashboardPage() {
         {syncMessage && (
           <div className="text-xs text-center py-2 px-4 rounded-lg bg-secondary text-muted-foreground border border-border">
             {syncMessage}
+          </div>
+        )}
+
+        {/* Feature 8: Broke Mode */}
+        {isBrokeMode && (
+          <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm flex items-center gap-3">
+            <span className="text-xl">💀</span>
+            <div>
+              <div className="font-semibold text-red-500">Broke Week activated</div>
+              <div className="text-xs text-muted-foreground">Balance is below ₹500. Maybe skip the Swiggy order today?</div>
+            </div>
           </div>
         )}
 
@@ -704,6 +870,84 @@ export default function DashboardPage() {
           )}
         </div>
 
+        {/* Feature 1: Spend Forecast */}
+        {isCurrentMonth && projectedSpend !== null && totalSpent > 0 && (
+          <Card className="rounded-xl border-border/60">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium">📈 Spend Forecast</span>
+                <span className="text-xs text-muted-foreground">Day {dayOfMonth} of {daysInMonth}</span>
+              </div>
+              <div className="text-xs text-muted-foreground mb-2">
+                Spent {formatINR(totalSpent)} so far → on track for{" "}
+                <span className={`font-semibold ${budget && projectedSpend > budget ? "text-red-500" : "text-foreground"}`}>
+                  {formatINR(projectedSpend)}
+                </span>{" "}
+                this month
+              </div>
+              <div className="w-full bg-secondary rounded-full h-2 overflow-hidden">
+                <div
+                  className={`h-2 rounded-full transition-all ${budget && projectedSpend > budget ? "bg-red-500" : "bg-emerald-500"}`}
+                  style={{ width: `${forecastPercent ?? Math.min((dayOfMonth / daysInMonth) * 100, 100)}%` }}
+                />
+              </div>
+              {budget && projectedSpend > budget && (
+                <p className="text-xs text-red-500 mt-1.5">⚠️ Projected to overshoot budget by {formatINR(projectedSpend - budget)}</p>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Feature 3: Recurring spend detector */}
+        {recurringMerchants.length > 0 && (
+          <Card className="rounded-xl border-border/60">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm font-medium">🔄 Recurring Spends</span>
+                <span className="text-xs text-muted-foreground">
+                  {formatINR(recurringMerchants.reduce((s, m) => s + m.avg, 0))}/mo total
+                </span>
+              </div>
+              <div className="space-y-2">
+                {recurringMerchants.map((m) => (
+                  <div key={m.merchant} className="flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-1.5">
+                      <span>{m.emoji}</span>
+                      <span className="font-medium truncate max-w-[140px]">{m.merchant}</span>
+                      <span className="text-muted-foreground">({m.months}mo)</span>
+                    </span>
+                    <span className="font-semibold">~{formatINR(m.avg)}</span>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Feature 5: No-spend streak + challenge */}
+        <Card className="rounded-xl border-border/60">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-sm font-medium">🔥 No-Spend Streak</span>
+              <span className="text-2xl font-bold">{noSpendStreak}d</span>
+            </div>
+            <p className="text-xs text-muted-foreground mb-3">
+              {noSpendStreak === 0 ? "You spent today — streak resets tomorrow" :
+               noSpendStreak >= 7 ? "🏆 Week-long streak! Impressive." :
+               `${7 - noSpendStreak} days to hit a week-long streak`}
+            </p>
+            {budget && (
+              <div className="text-xs">
+                <div className="flex justify-between mb-1">
+                  <span className="text-muted-foreground">Savings challenge</span>
+                  <span className="font-medium">{formatINR(Math.max(0, (budget ?? 0) - totalSpent))} saved</span>
+                </div>
+                <Progress value={budget ? Math.min(((budget - totalSpent) / budget) * 100, 100) : 0} className="h-1.5" />
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         {budget && !loading && (
           <Card className={`rounded-xl border ${
             totalSpent >= budget ? "border-red-500/50 bg-red-500/5" :
@@ -830,6 +1074,33 @@ export default function DashboardPage() {
               )}
             </CardContent>
           </Card>
+
+          {/* Feature 9: Anonymous comparison */}
+          {compareStats.length > 0 && categoryStats.length > 0 && (
+            <Card className="md:col-span-2 rounded-xl border-border/60">
+              <CardHeader className="pb-2 pt-4 px-4">
+                <CardTitle className="text-sm font-medium text-muted-foreground">vs. Other Students 👥</CardTitle>
+              </CardHeader>
+              <CardContent className="px-4 pb-4 space-y-2">
+                {categoryStats.slice(0, 4).map((cat) => {
+                  const avg = compareStats.find((c) => c.category_id === cat.id)?.avg_spend ?? 0;
+                  if (!avg) return null;
+                  const better = cat.amount <= avg;
+                  return (
+                    <div key={cat.id} className="text-xs">
+                      <div className="flex justify-between mb-0.5">
+                        <span>{cat.emoji} {cat.name}</span>
+                        <span className={better ? "text-emerald-600 font-medium" : "text-red-500 font-medium"}>
+                          {better ? "👑" : "📈"} You: {formatINR(cat.amount)} · Avg: {formatINR(avg)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                }).filter(Boolean)}
+                <p className="text-[10px] text-muted-foreground pt-1">Anonymous · 3+ users required to show</p>
+              </CardContent>
+            </Card>
+          )}
         </div>
 
         {!loading && filteredTransactions.length > 0 && (
@@ -984,18 +1255,6 @@ export default function DashboardPage() {
                   </button>
                 ))}
                 <div className="h-3 w-px bg-border" />
-                {Array.from(new Set(transactions.map((t) => t.source))).length > 1 && (
-                  <select
-                    value={filterBank}
-                    onChange={(e) => setFilterBank(e.target.value)}
-                    className="text-xs bg-secondary border border-border rounded-lg px-2 py-1.5 text-foreground cursor-pointer h-8"
-                  >
-                    <option value="all">All Banks</option>
-                    {Array.from(new Set(transactions.map((t) => t.source))).map((src) => (
-                      <option key={src} value={src}>{src}</option>
-                    ))}
-                  </select>
-                )}
                 <select
                   value={filterCategory}
                   onChange={(e) => setFilterCategory(e.target.value)}
@@ -1008,6 +1267,26 @@ export default function DashboardPage() {
                     </option>
                   ))}
                 </select>
+                {Array.from(new Set(transactions.map((t) => t.source))).length > 1 && (
+                  <select
+                    value={filterBank}
+                    onChange={(e) => setFilterBank(e.target.value)}
+                    className="text-xs bg-secondary border border-border rounded-full px-2.5 py-1 text-foreground cursor-pointer"
+                  >
+                    <option value="all">All Banks</option>
+                    {Array.from(new Set(transactions.map((t) => t.source))).map((src) => (
+                      <option key={src} value={src}>{src}</option>
+                    ))}
+                  </select>
+                )}
+                {!pushEnabled && (
+                  <button
+                    onClick={enablePush}
+                    className="text-xs px-2.5 py-1 rounded-full border border-border hover:bg-secondary transition-colors"
+                  >
+                    🔔 Enable alerts
+                  </button>
+                )}
               </div>
             </div>
           </CardHeader>
@@ -1064,6 +1343,16 @@ export default function DashboardPage() {
                         )}
                         {formatINR(t.amount)}
                       </div>
+                      {/* Split button */}
+                      {t.type === "debit" && (
+                        <button
+                          onClick={() => { setSplitTxn(t); setSplitAmount(String(Math.round(t.amount / 2))); }}
+                          className="text-[10px] px-2 py-1 rounded-lg border border-border hover:bg-secondary transition-colors text-muted-foreground flex-shrink-0"
+                          title="Split this"
+                        >
+                          👥
+                        </button>
+                      )}
                     </div>
                   );
                 })}
@@ -1107,7 +1396,122 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
         )}
+
+        {/* Feature 4: Splits panel */}
+        {splits.length > 0 && (
+          <Card className="rounded-xl border-border/60">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm font-medium">👥 Dues Tracker</span>
+                <span className="text-xs text-muted-foreground">{splits.length} pending</span>
+              </div>
+              <div className="space-y-2">
+                {splits.map((s) => (
+                  <div key={s.id} className="flex items-center justify-between text-xs py-2 border-b border-border/50 last:border-0">
+                    <div>
+                      <span className="font-medium">{s.split_with_name}</span>
+                      <span className="text-muted-foreground ml-2">owes you for {s.transactions?.merchant}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-emerald-600">{formatINR(s.amount_owed)}</span>
+                      <button
+                        onClick={() => settleSplit(s.id)}
+                        className="px-2 py-0.5 rounded-lg bg-secondary border border-border hover:bg-muted transition-colors"
+                      >
+                        Settled ✓
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
+
+      {/* Feature 7: Onboarding */}
+      {showOnboarding && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-sm mx-4 shadow-xl">
+            {onboardingStep === 1 && (
+              <>
+                <div className="text-3xl mb-3">👋</div>
+                <h2 className="text-lg font-bold mb-2">Welcome to VibeWallet</h2>
+                <p className="text-sm text-muted-foreground mb-6">Track every rupee, discover your spending personality, and actually understand where your money goes.</p>
+                <div className="space-y-2 mb-6">
+                  {["Your bank emails → auto-parsed transactions", "AI-powered vibe categories", "Monthly Wrapped report"].map((f) => (
+                    <div key={f} className="flex items-center gap-2 text-xs"><span className="text-emerald-500">✓</span>{f}</div>
+                  ))}
+                </div>
+                <Button className="w-full rounded-xl" onClick={() => setOnboardingStep(2)}>Let&apos;s go →</Button>
+              </>
+            )}
+            {onboardingStep === 2 && (
+              <>
+                <div className="text-3xl mb-3">💰</div>
+                <h2 className="text-lg font-bold mb-2">Set a monthly budget</h2>
+                <p className="text-sm text-muted-foreground mb-4">We&apos;ll warn you before you go over. Skip if you&apos;re not ready.</p>
+                <div className="relative mb-4">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">₹</span>
+                  <input
+                    type="number" placeholder="e.g. 10000" value={budgetInput}
+                    onChange={(e) => setBudgetInput(e.target.value)}
+                    className="w-full pl-7 pr-4 py-2.5 text-sm bg-background border border-border rounded-xl focus:outline-none"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="outline" className="flex-1 rounded-xl" onClick={() => setOnboardingStep(3)}>Skip</Button>
+                  <Button className="flex-1 rounded-xl" onClick={async () => { if (budgetInput) { await saveBudget(); } setOnboardingStep(3); }}>Save</Button>
+                </div>
+              </>
+            )}
+            {onboardingStep === 3 && (
+              <>
+                <div className="text-3xl mb-3">📧</div>
+                <h2 className="text-lg font-bold mb-2">Connect your bank</h2>
+                <p className="text-sm text-muted-foreground mb-4">Make sure your bank sends transaction alerts to this Gmail. Then hit Sync.</p>
+                <div className="flex flex-wrap gap-2 mb-6">
+                  {["HDFC", "SBI", "ICICI", "Axis", "Kotak", "Equitas"].map((b) => (
+                    <span key={b} className="text-xs px-2 py-1 bg-secondary border border-border rounded-lg">{b}</span>
+                  ))}
+                </div>
+                <Button className="w-full rounded-xl" onClick={completeOnboarding}>Got it — let&apos;s sync 🚀</Button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Split modal */}
+      {splitTxn && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-sm mx-4 shadow-xl">
+            <h2 className="text-lg font-bold mb-1">👥 Split this bill</h2>
+            <p className="text-sm text-muted-foreground mb-4">{splitTxn.merchant} · {formatINR(splitTxn.amount)}</p>
+            <input
+              type="text"
+              placeholder="Who do they owe? (e.g. Rohit)"
+              value={splitName}
+              onChange={(e) => setSplitName(e.target.value)}
+              className="w-full px-3 py-2.5 text-sm bg-background border border-border rounded-xl mb-3 focus:outline-none focus:ring-2 focus:ring-foreground/20"
+            />
+            <div className="relative mb-4">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">₹</span>
+              <input
+                type="number"
+                placeholder="Amount they owe"
+                value={splitAmount}
+                onChange={(e) => setSplitAmount(e.target.value)}
+                className="w-full pl-7 pr-4 py-2.5 text-sm bg-background border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-foreground/20"
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1 rounded-xl" onClick={() => setSplitTxn(null)}>Cancel</Button>
+              <Button className="flex-1 rounded-xl" onClick={addSplit} disabled={!splitName || !splitAmount}>Add Split</Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showBudgetModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">

@@ -2,9 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { google } from "googleapis";
+import webpush from "web-push";
 import { parseTransactionEmail, buildGmailQuery, parseBalanceAlert } from "@/lib/gmail-parser";
 import { categorizeTransaction } from "@/lib/vibe-categories";
 import { supabaseAdmin } from "@/lib/supabase";
+
+webpush.setVapidDetails(
+  process.env.VAPID_SUBJECT!,
+  process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!,
+  process.env.VAPID_PRIVATE_KEY!
+);
 
 /**
  * HOW GMAIL PARSING WORKS — STEP BY STEP
@@ -241,6 +248,48 @@ export async function POST(req: NextRequest) {
           { error: "Failed to save transactions" },
           { status: 500 }
         );
+      }
+
+      // Send push notification for each new debit
+      if (newTransactions.length > 0) {
+        const debits = newTransactions.filter((t) => t.type === "debit");
+        if (debits.length > 0) {
+          const { data: subs } = await supabaseAdmin
+            .from("push_subscriptions")
+            .select("endpoint, p256dh, auth")
+            .eq("user_email", session.user?.email);
+
+          if (subs && subs.length > 0) {
+            // Count this week's same-category debits for context
+            const weekAgo = new Date();
+            weekAgo.setDate(weekAgo.getDate() - 7);
+            const { data: weekTxns } = await supabaseAdmin
+              .from("transactions")
+              .select("category_id")
+              .eq("user_email", session.user?.email)
+              .eq("type", "debit")
+              .gte("date", weekAgo.toISOString().split("T")[0]);
+
+            for (const debit of debits.slice(0, 3)) {
+              const sameThisWeek = (weekTxns || [])
+                .filter((t) => t.category_id === debit.category_id).length;
+              const msg = sameThisWeek >= 2
+                ? `spent ₹${debit.amount} at ${debit.merchant} ${debit.category_emoji} — ${sameThisWeek}x this week`
+                : `spent ₹${debit.amount} at ${debit.merchant} ${debit.category_emoji}`;
+
+              for (const sub of subs) {
+                try {
+                  await webpush.sendNotification(
+                    { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+                    JSON.stringify({ title: "VibeWallet 💸", body: msg })
+                  );
+                } catch {
+                  // subscription may have expired
+                }
+              }
+            }
+          }
+        }
       }
     }
 
