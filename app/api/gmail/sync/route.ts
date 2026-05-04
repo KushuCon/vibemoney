@@ -179,29 +179,41 @@ export async function POST(req: NextRequest) {
             ? new Date(dateHeader).toISOString()
             : new Date(emailDate).toISOString();
 
-          const { data: existingBalance, error: balanceError } = await supabaseAdmin
-            .from("bank_balances")
-            .select("updated_at")
-            .eq("user_email", session.user?.email)
-            .eq("bank_name", balanceParsed.bankName)
-            .single();
+          // const { data: existingBalance, error: balanceError } = await supabaseAdmin
+          //   .from("bank_balances")
+          //   .select("updated_at")
+          //   .eq("user_email", session.user?.email)
+          //   .eq("bank_name", balanceParsed.bankName)
+          //   .single();
 
-          // PGRST116 = no rows found (first time seeing this bank) — that's fine, upsert it
-          const noRow = balanceError?.code === "PGRST116";
-          const isNewer = !existingBalance || balanceIso > new Date(existingBalance.updated_at).toISOString();
-          if (noRow || isNewer) {
-            await supabaseAdmin
-              .from("bank_balances")
-              .upsert(
-                {
-                  user_email: session.user?.email,
-                  bank_name: balanceParsed.bankName,
-                  balance: balanceParsed.balance,
-                  updated_at: balanceIso,
-                },
-                { onConflict: "user_email,bank_name" }
-              );
-          }
+          // // PGRST116 = no rows found (first time seeing this bank) — that's fine, upsert it
+          // const noRow = balanceError?.code === "PGRST116";
+          // const isNewer = !existingBalance || balanceIso > new Date(existingBalance.updated_at).toISOString();
+          // if (noRow || isNewer) {
+          //   await supabaseAdmin
+          //     .from("bank_balances")
+          //     .upsert(
+          //       {
+          //         user_email: session.user?.email,
+          //         bank_name: balanceParsed.bankName,
+          //         balance: balanceParsed.balance,
+          //         updated_at: balanceIso,
+          //       },
+          //       { onConflict: "user_email,bank_name" }
+          //     );
+          // }
+
+          await supabaseAdmin
+  .from("bank_balances")
+  .upsert(
+    {
+      user_email: session.user?.email,
+      bank_name: balanceParsed.bankName,
+      balance: balanceParsed.balance,
+      updated_at: balanceIso,
+    },
+    { onConflict: "user_email,bank_name" }
+  );
         }
 
         if (!parsed) {
