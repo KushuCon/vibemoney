@@ -21,14 +21,6 @@ import {
 } from "recharts";
 
 
-// Dashboard mein kahi bhi
-<button onClick={async () => {
-  const res = await fetch("/api/push/test", { method: "POST" });
-  const d = await res.json();
-  alert(d.error || `Sent to ${d.sent} device(s)!`);
-}}>
-  🔔 Test Notification
-</button>
 
 
 interface Transaction {
@@ -1576,7 +1568,13 @@ export default function DashboardPage() {
       {showWrapped && wrappedData && (
         <WrappedModal data={wrappedData} onClose={() => setShowWrapped(false)} />
       )}
-
+      <button onClick={async () => {
+  const res = await fetch("/api/push/test", { method: "POST" });
+  const d = await res.json();
+  alert(d.error || `Sent to ${d.sent} device(s)!`);
+}}>
+  🔔 Test Notification
+</button>
       {/* Footer */}
       <footer className="mt-12 pb-6 text-center text-xs text-muted-foreground space-y-1">
         <div>© 2026 VibeWallet. All rights reserved.</div>
