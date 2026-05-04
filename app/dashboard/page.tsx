@@ -20,6 +20,17 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer
 } from "recharts";
 
+
+// Dashboard mein kahi bhi
+<button onClick={async () => {
+  const res = await fetch("/api/push/test", { method: "POST" });
+  const d = await res.json();
+  alert(d.error || `Sent to ${d.sent} device(s)!`);
+}}>
+  🔔 Test Notification
+</button>
+
+
 interface Transaction {
   id: string;
   amount: number;
