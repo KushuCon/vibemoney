@@ -260,23 +260,63 @@ export default function DashboardPage() {
     }
   }, [session, loading, budgetLoaded, transactions.length, budget, dismissedBudgetPrompt]);
 
-  useEffect(() => {
-    if (!session?.user?.email) return;
-    // Load splits
-    fetch("/api/splits").then((r) => r.json()).then(setSplits).catch(() => {});
-    // Load compare stats
-    fetch(`/api/stats/compare?month=${selectedMonth}`)
-      .then((r) => r.json()).then(setCompareStats).catch(() => {});
-    // Check push permission + DB subscription
-    if ("Notification" in window && Notification.permission === "granted") {
-      fetch("/api/push/status")
-        .then((r) => r.json())
-        .then((d) => setPushEnabled(d.subscribed))
-        .catch(() => setPushEnabled(false));
-    } else {
+useEffect(() => {
+  if (!session?.user?.email) return;
+
+  // Load splits
+  fetch("/api/splits").then((r) => r.json()).then(setSplits).catch(() => {});
+
+  // Load compare stats
+  fetch(`/api/stats/compare?month=${selectedMonth}`)
+    .then((r) => r.json()).then(setCompareStats).catch(() => {});
+
+  // Check push permission + auto-subscribe this device if not registered
+  const syncPushSubscription = async () => {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+      setPushEnabled(false);
+      return;
+    }
+
+    if (Notification.permission !== "granted") {
+      setPushEnabled(false);
+      return;
+    }
+
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const existing = await reg.pushManager.getSubscription();
+
+      if (existing) {
+        // This device is already subscribed — just mark UI as enabled
+        setPushEnabled(true);
+      } else {
+        // Permission is granted but this device was never subscribed
+        // (e.g. Android, new install, cleared browser data)
+        // Re-subscribe silently — no browser prompt shown
+        const sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!),
+        });
+        const json = sub.toJSON();
+        await fetch("/api/push", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            endpoint: json.endpoint,
+            p256dh: (json.keys as Record<string, string>)?.p256dh,
+            auth: (json.keys as Record<string, string>)?.auth,
+          }),
+        });
+        setPushEnabled(true);
+      }
+    } catch (e) {
+      console.error("Push sync failed:", e);
       setPushEnabled(false);
     }
-  }, [session, selectedMonth]);
+  };
+
+  syncPushSubscription();
+}, [session, selectedMonth]);
 
   // Fix 3: handleSync — always syncs current month only, no dropdown
   const handleSync = async () => {
@@ -431,7 +471,11 @@ export default function DashboardPage() {
       return;
     }
     const permission = await Notification.requestPermission();
-    if (permission !== "granted") return;
+if (permission === "denied") {
+  alert("Notifications blocked. Please enable them in your browser settings and refresh.");
+  return;
+}
+if (permission !== "granted") return;
     const reg = await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
