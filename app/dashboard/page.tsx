@@ -267,8 +267,15 @@ export default function DashboardPage() {
     // Load compare stats
     fetch(`/api/stats/compare?month=${selectedMonth}`)
       .then((r) => r.json()).then(setCompareStats).catch(() => {});
-    // Check push permission
-    if ("Notification" in window) setPushEnabled(Notification.permission === "granted");
+    // Check push permission + DB subscription
+    if ("Notification" in window && Notification.permission === "granted") {
+      fetch("/api/push/status")
+        .then((r) => r.json())
+        .then((d) => setPushEnabled(d.subscribed))
+        .catch(() => setPushEnabled(false));
+    } else {
+      setPushEnabled(false);
+    }
   }, [session, selectedMonth]);
 
   // Fix 3: handleSync — always syncs current month only, no dropdown
@@ -1579,14 +1586,7 @@ export default function DashboardPage() {
       {showWrapped && wrappedData && (
         <WrappedModal data={wrappedData} onClose={() => setShowWrapped(false)} />
       )}
-      {/* <button onClick={async () => {
-  const res = await fetch("/api/push/test", { method: "POST" });
-  const d = await res.json();
-  alert(d.error || `Sent to ${d.sent} device(s)!`);
-}}>
-  🔔 Test Notification
-</button> */}
-      {/* Footer */}
+      
       <footer className="mt-12 pb-6 text-center text-xs text-muted-foreground space-y-1">
         <div>© 2026 VibeWallet. All rights reserved.</div>
         <div className="flex items-center justify-center gap-3">
