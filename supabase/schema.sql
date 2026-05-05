@@ -385,3 +385,79 @@ CREATE INDEX IF NOT EXISTS idx_bank_balances_user
 
 -- Primary bank preference
 ALTER TABLE users ADD COLUMN IF NOT EXISTS primary_bank TEXT;
+
+
+-- Feature: splits table (feature 4)
+CREATE TABLE IF NOT EXISTS splits (
+  id              UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  transaction_id  UUID NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+  user_email      TEXT NOT NULL,
+  split_with_name TEXT NOT NULL,
+  amount_owed     NUMERIC(12,2) NOT NULL,
+  settled         BOOLEAN DEFAULT FALSE,
+  settled_at      TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_splits_user ON splits(user_email);
+CREATE INDEX IF NOT EXISTS idx_splits_txn ON splits(transaction_id);
+ALTER TABLE splits ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "splits_own_data" ON splits FOR ALL USING (user_email = current_user);
+
+-- Feature: push notification subscriptions (feature 2)
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id          UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  user_email  TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+  endpoint    TEXT NOT NULL,
+  p256dh      TEXT NOT NULL,
+  auth        TEXT NOT NULL,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_email, endpoint)
+);
+ALTER TABLE push_subscriptions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "push_own_data" ON push_subscriptions FOR ALL USING (user_email = current_user);
+
+-- Feature: savings challenges (feature 5)
+CREATE TABLE IF NOT EXISTS challenges (
+  id            UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  user_email    TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+  title         TEXT NOT NULL,
+  target_amount NUMERIC(12,2),
+  category_id   TEXT,
+  month         TEXT NOT NULL,
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_email, month, category_id)
+);
+ALTER TABLE challenges ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "challenges_own_data" ON challenges FOR ALL USING (user_email = current_user);
+
+-- Feature: onboarding flag (feature 7)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_done BOOLEAN DEFAULT FALSE;
+
+-- Feature: anonymous comparison (feature 9) — aggregate view, no PII
+-- FIX: outer SELECT references `month` alias from subquery, not `date` directly
+CREATE OR REPLACE VIEW anonymous_category_stats AS
+SELECT
+  month,
+  category_id,
+  category_name,
+  ROUND(AVG(monthly_total)::numeric, 2) AS avg_spend,
+  COUNT(*) AS user_count
+FROM (
+  SELECT
+    user_email,
+    TO_CHAR(date, 'YYYY-MM') AS month,
+    category_id,
+    category_name,
+    SUM(amount) AS monthly_total
+  FROM transactions
+  WHERE type = 'debit'
+  GROUP BY user_email, TO_CHAR(date, 'YYYY-MM'), category_id, category_name
+) sub
+GROUP BY month, category_id, category_name
+HAVING COUNT(*) >= 3;
+
+
+SELECT * FROM bank_balances WHERE user_email = 'kushucon@gmail.com';
+
+SELECT id, endpoint, created_at FROM push_subscriptions 
+WHERE user_email = 'kushucon@gmail.com';
