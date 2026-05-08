@@ -273,7 +273,37 @@ export function parseTransactionEmail(
       vpa: vpaM?.[1],
     };
   }
+  // ── ZERODHA ───────────────────────────────────────────────────────────────
+if (sender.includes("zerodha")) {
+  const isPayoutEmail =
+    lower.includes("payout") ||
+    lower.includes("withdrawal") ||
+    lower.includes("deposited") ||
+    lower.includes("credited") ||
+    lower.includes("processed");
+  if (!isPayoutEmail) return null;
 
+  const amountMatch =
+    text.match(/₹\s*([0-9,]+(?:\.[0-9]{1,2})?)/i) ||
+    text.match(/(?:Rs\.?\s*|INR\s*)([0-9,]+(?:\.[0-9]{1,2})?)/i);
+  const amount = amountMatch ? parseFloat(amountMatch[1].replace(/,/g, "")) : 0;
+  if (amount <= 0) return null;
+
+  const acct = text.match(/ending with\s+(\d{4})/i)?.[1] ||
+    text.match(/[Xx*]{2,}(\d{4})/)?.[1];
+
+  return {
+    amount,
+    type: "credit",
+    merchant: "Zerodha",
+    description: "Zerodha instant payout",
+    date: extractDate(text, emailDate),
+    account_last4: acct,
+    raw_subject: subject,
+    email_id: emailId,
+    source: "Zerodha",
+  };
+}
   // ── GROWW ─────────────────────────────────────────────────────────────────
   if (sender.includes("groww")) {
     if (!lower.includes("withdrawal") && !lower.includes("credited") && !lower.includes("payout")) {
