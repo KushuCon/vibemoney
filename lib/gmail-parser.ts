@@ -335,7 +335,10 @@ if (sender.includes("zerodha")) {
     lower.includes("imps dr") ||
     lower.includes("rs..*has been debited") ||
     lower.includes("rs..*debited from account") ||
-    lower.includes("has been debited from");
+    lower.includes("has been debited from")
+    lower.includes("is debited from your account") ||     // ← ADD THIS
+  lower.includes("is debited from your a/c") ||         // ← ADD THIS
+  lower.includes("towards vpa");   
 
   if (!isRealTransaction) {
     const BALANCE_ALERT_PATTERNS = [
@@ -375,13 +378,20 @@ if (sender.includes("zerodha")) {
   } else if (type === "credit") {
     merchant = lower.includes("neft cr") ? "NEFT Credit" : "Bank Credit";
   } else {
-    const m = text.match(/to VPA\s+(\S+)\s+([A-Z][A-Za-z0-9\s]{1,40}?)(?:\s+on\s|\.|$)/i);
-    if (m) {
-      vpa = m[1];
-      const name = m[2].trim();
-      merchant = /^\d{10}$/.test(name.replace(/\s/g, "")) ? "UPI Payment" : clean(name);
+    // New HDFC format: "towards VPA 998259@m (NAME)"
+    const newFmtM = text.match(/towards VPA\s+(\S+)\s+\(([^)]+)\)/i);
+    if (newFmtM) {
+      vpa = newFmtM[1];
+      merchant = clean(newFmtM[2]);
     } else {
-      merchant = "UPI Payment";
+      const m = text.match(/to VPA\s+(\S+)\s+([A-Z][A-Za-z0-9\s]{1,40}?)(?:\s+on\s|\.|$)/i);
+      if (m) {
+        vpa = m[1];
+        const name = m[2].trim();
+        merchant = /^\d{10}$/.test(name.replace(/\s/g, "")) ? "UPI Payment" : clean(name);
+      } else {
+        merchant = "UPI Payment";
+      }
     }
   }
 
