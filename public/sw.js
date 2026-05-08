@@ -61,3 +61,28 @@ self.addEventListener("push", (event) => {
     })
   );
 });
+
+// 3-hour idle check — triggered by the app via a periodic message
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SCHEDULE_IDLE_CHECK") {
+    scheduleIdleNotification();
+  }
+});
+
+let idleTimer = null;
+
+function scheduleIdleNotification() {
+  if (idleTimer) clearTimeout(idleTimer);
+  const THREE_HOURS = 3 * 60 * 60 * 1000;
+  idleTimer = setTimeout(async () => {
+    // Only fire if the app hasn't reset the timer
+    const title = "VibeWallet 👀";
+    const body = "No transactions yet today — staying on track?";
+    await self.registration.showNotification(title, {
+      body,
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+      tag: "idle-check",
+    });
+  }, THREE_HOURS);
+}

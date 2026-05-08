@@ -40,6 +40,26 @@ export async function POST(req: NextRequest) {
   const { daysBack, syncAll } = await req.json().catch(() => ({}));
   const session = await getServerSession(authOptions);
 
+  // Rate limit: max 1 sync per 5 minutes per user
+  if (session?.user?.email) {
+    const { data: userData2 } = await supabaseAdmin
+      .from("users")
+      .select("last_synced_at")
+      .eq("email", session.user?.email)
+      .single();
+
+    if (userData2?.last_synced_at) {
+      const lastSync = new Date(userData2.last_synced_at).getTime();
+      const diffMinutes = (Date.now() - lastSync) / 1000 / 60;
+      if (diffMinutes < 5) {
+        return NextResponse.json(
+          { error: `Please wait ${Math.ceil(5 - diffMinutes)} more minute(s) before syncing again.` },
+          { status: 429 }
+        );
+      }
+    }
+  }
+
   if (!session?.accessToken) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
@@ -301,6 +321,44 @@ export async function POST(req: NextRequest) {
         .from("users")
         .update({ sync_from_date: new Date().toISOString().split("T")[0] })
         .eq("email", session.user?.email);
+    }
+
+    // Budget alert: push if spent > 80% of budget
+    try {
+      const userEmail = session.user?.email;
+      const { data: u } = await supabaseAdmin
+        .from("users")
+        .select("monthly_budget")
+        .eq("email", userEmail)
+        .single();
+
+      if (u?.monthly_budget) {
+        const currentMonth = new Date().toISOString().substring(0, 7);
+        const { data: txns } = await supabaseAdmin
+          .from("transactions")
+          .select("amount")
+          .eq("user_email", userEmail)
+          .eq("type", "debit")
+          .gte("date", `${currentMonth}-01`);
+
+        const spent = txns?.reduce((s: number, t: any) => s + Number(t.amount), 0) ?? 0;
+        const pct = (spent / u.monthly_budget) * 100;
+
+        if (pct >= 80) {
+          const label = pct >= 100 ? "💀 Budget gone!" : `⚠️ ${Math.round(pct)}% of budget used`;
+          await fetch(`${process.env.NEXTAUTH_URL}/api/push/send`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              userEmail,
+              title: "VibeWallet Budget Alert 🚨",
+              body: `${label} — ₹${spent.toLocaleString("en-IN")} spent of ₹${u.monthly_budget.toLocaleString("en-IN")}`,
+            }),
+          });
+        }
+      }
+    } catch (e) {
+      console.error("Budget alert push failed:", e);
     }
 
     // ── Update last sync time ───────────────────────────────────────────────

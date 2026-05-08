@@ -48,6 +48,14 @@ interface CategoryStat {
   percentage: number;
 }
 
+interface Goal {
+  id: string;
+  title: string;
+  target_amount: number;
+  category_id: string | null;
+  month: string;
+}
+
 function SpendingHeatmap({ transactions }: { transactions: Transaction[] }) {
   const today = new Date();
   const days: { date: string; spent: number; received: number }[] = [];
@@ -137,6 +145,13 @@ function urlBase64ToUint8Array(base64String: string) {
   return outputArray;
 }
 
+// Reset the idle notification timer in the service worker
+function resetIdleNotificationTimer() {
+  if (typeof navigator !== "undefined" && "serviceWorker" in navigator && navigator.serviceWorker.controller) {
+    navigator.serviceWorker.controller.postMessage({ type: "SCHEDULE_IDLE_CHECK" });
+  }
+}
+
 export default function DashboardPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
@@ -144,6 +159,7 @@ export default function DashboardPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [syncCooldown, setSyncCooldown] = useState(0); // seconds remaining
   const [syncMessage, setSyncMessage] = useState("");
   const [selectedMonth, setSelectedMonth] = useState(format(new Date(), "yyyy-MM"));
   const [selectedAccount, setSelectedAccount] = useState<string>("all");
@@ -154,6 +170,8 @@ export default function DashboardPage() {
   const [hasEverSynced, setHasEverSynced] = useState(false);
   const [showWrapped, setShowWrapped] = useState(false);
   const [wrappedData, setWrappedData] = useState(null);
+  const [roastData, setRoastData] = useState<{ title: string; subtitle: string; roast: string; emoji: string } | null>(null);
+  const [roastLoading, setRoastLoading] = useState(false);
   const [wrappedError, setWrappedError] = useState("");
   const [generatingWrapped, setGeneratingWrapped] = useState(false);
   const [isDark, setIsDark] = useState(() => {
@@ -190,7 +208,25 @@ export default function DashboardPage() {
   const [splitTxn, setSplitTxn] = useState<Transaction | null>(null);
   const [splitName, setSplitName] = useState("");
   const [splitAmount, setSplitAmount] = useState("");
+  const [splitError, setSplitError] = useState("");
+  const [showAddTxn, setShowAddTxn] = useState(false);
+  const [addTxnForm, setAddTxnForm] = useState({
+    merchant: "",
+    amount: "",
+    type: "debit" as "debit" | "credit",
+    date: format(new Date(), "yyyy-MM-dd"),
+    category_id: "",
+    note: "",
+  });
+  const [addTxnError, setAddTxnError] = useState("");
+  const [addTxnLoading, setAddTxnLoading] = useState(false);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [showGoalModal, setShowGoalModal] = useState(false);
+  const [goalForm, setGoalForm] = useState({ title: "", target_amount: "", category_id: "", month: format(new Date(), "yyyy-MM") });
+
+  const [deleteGoalError, setDeleteGoalError] = useState("");
   const [pushEnabled, setPushEnabled] = useState(false);
+  const [editingCategoryTxn, setEditingCategoryTxn] = useState<Transaction | null>(null);
   const [filterBank, setFilterBank] = useState("all");
   const [compareStats, setCompareStats] = useState<{
     category_id: string;
@@ -266,6 +302,9 @@ useEffect(() => {
   // Load splits
   fetch("/api/splits").then((r) => r.json()).then(setSplits).catch(() => {});
 
+  // Load goals
+  fetch("/api/goals").then((r) => r.json()).then(setGoals).catch(() => {});
+
   // Load compare stats
   fetch(`/api/stats/compare?month=${selectedMonth}`)
     .then((r) => r.json()).then(setCompareStats).catch(() => {});
@@ -318,6 +357,23 @@ useEffect(() => {
   syncPushSubscription();
 }, [session, selectedMonth]);
 
+useEffect(() => {
+  if (pushEnabled) {
+    try {
+      resetIdleNotificationTimer();
+    } catch (e) {
+      // ignore
+    }
+  }
+}, [pushEnabled]);
+
+// Countdown for sync cooldown
+useEffect(() => {
+  if (syncCooldown <= 0) return;
+  const timer = setTimeout(() => setSyncCooldown((s) => s - 1), 1000);
+  return () => clearTimeout(timer);
+}, [syncCooldown]);
+
   // Fix 3: handleSync — always syncs current month only, no dropdown
   const handleSync = async () => {
     setSyncing(true);
@@ -338,7 +394,14 @@ useEffect(() => {
         setSyncMessage(`Error: ${data.error}`);
       } else {
         setSyncMessage(`✓ ${data.synced} synced · ${data.skipped} skipped`);
-        fetchTransactions();
+        await fetchTransactions();
+        try {
+          resetIdleNotificationTimer();
+        } catch (e) {
+          // no-op
+        }
+        // start client-side cooldown (5 minutes)
+        try { setSyncCooldown(300); } catch (e) { /* noop */ }
       }
     } catch {
       setSyncMessage("Sync failed. Try again.");
@@ -366,6 +429,24 @@ useEffect(() => {
       setWrappedError("Failed to generate report. Check your AI API key.");
     } finally {
       setGeneratingWrapped(false);
+    }
+  };
+
+  const fetchRoast = async () => {
+    if (debits.length === 0) return;
+    setRoastLoading(true);
+    try {
+      const res = await fetch("/api/wrapped", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ month: selectedMonth }),
+      });
+      const data = await res.json();
+      if (data.personality) setRoastData(data.personality);
+    } catch {
+      // fail silently
+    } finally {
+      setRoastLoading(false);
     }
   };
 
@@ -467,49 +548,76 @@ useEffect(() => {
 
   const enablePush = async () => {
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-      alert("Push notifications not supported on this browser.");
+      alert("Push notifications aren't supported on this browser. Try Chrome on Android or desktop.");
       return;
     }
     const permission = await Notification.requestPermission();
-if (permission === "denied") {
-  alert("Notifications blocked. Please enable them in your browser settings and refresh.");
-  return;
-}
-if (permission !== "granted") return;
-    const reg = await navigator.serviceWorker.ready;
-    const sub = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!),
-    });
-    const json = sub.toJSON();
-    await fetch("/api/push", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        endpoint: json.endpoint,
-        p256dh: (json.keys as Record<string, string>)?.p256dh,
-        auth: (json.keys as Record<string, string>)?.auth,
-      }),
-    });
-    setPushEnabled(true);
+    if (permission === "denied") {
+      alert(
+        "Notifications are blocked.\n\n" +
+        "To fix this:\n" +
+        "1. Tap the 🔒 lock icon in your browser address bar\n" +
+        "2. Find 'Notifications' → set to 'Allow'\n" +
+        "3. Refresh this page"
+      );
+      return;
+    }
+    if (permission !== "granted") return;
+
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!),
+      });
+      const json = sub.toJSON();
+      await fetch("/api/push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          endpoint: json.endpoint,
+          p256dh: (json.keys as Record<string, string>)?.p256dh,
+          auth: (json.keys as Record<string, string>)?.auth,
+        }),
+      });
+      setPushEnabled(true);
+      try { resetIdleNotificationTimer(); } catch (e) { /* noop */ }
+    } catch (e) {
+      alert("Something went wrong enabling notifications. Please refresh and try again.");
+      console.error(e);
+    }
   };
 
   const addSplit = async () => {
     if (!splitTxn || !splitName || !splitAmount) return;
-    const res = await fetch("/api/splits", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        transaction_id: splitTxn.id,
-        split_with_name: splitName,
-        amount_owed: Number(splitAmount),
-      }),
-    });
-    const newSplit = await res.json();
-    setSplits((prev) => [newSplit, ...prev]);
-    setSplitTxn(null);
-    setSplitName("");
-    setSplitAmount("");
+    setSplitError("");
+    try {
+      const res = await fetch("/api/splits", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transaction_id: splitTxn.id,
+          split_with_name: splitName,
+          amount_owed: Number(splitAmount),
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        setSplitError(err?.error ?? "Failed to add split. Try again.");
+        return;
+      }
+      const newSplit = await res.json();
+      if (!newSplit?.id) {
+        setSplitError("Split created but something looks off. Refresh to check.");
+        return;
+      }
+      setSplits((prev) => [newSplit, ...prev]);
+      setSplitTxn(null);
+      setSplitName("");
+      setSplitAmount("");
+    } catch (e) {
+      setSplitError("Network error — split not saved.");
+    }
   };
 
   const settleSplit = async (id: string) => {
@@ -519,6 +627,84 @@ if (permission !== "granted") return;
       body: JSON.stringify({ id }),
     });
     setSplits((prev) => prev.filter((s) => s.id !== id));
+  };
+
+  const submitManualTxn = async () => {
+    if (!addTxnForm.merchant || !addTxnForm.amount || !addTxnForm.date) {
+      setAddTxnError("Merchant, amount and date are required.");
+      return;
+    }
+    setAddTxnLoading(true);
+    setAddTxnError("");
+    try {
+      const res = await fetch("/api/transactions/manual", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(addTxnForm),
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(() => null);
+        setAddTxnError(e?.error ?? "Failed to add transaction.");
+        return;
+      }
+      const newTxn = await res.json();
+      setTransactions((prev) => [newTxn, ...prev]);
+      setShowAddTxn(false);
+      setAddTxnForm({ merchant: "", amount: "", type: "debit", date: format(new Date(), "yyyy-MM-dd"), category_id: "", note: "" });
+    } catch {
+      setAddTxnError("Network error. Try again.");
+    } finally {
+      setAddTxnLoading(false);
+    }
+  };
+
+  const deleteManualTxn = async (id: string) => {
+    await fetch("/api/transactions/manual", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    setTransactions((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const addGoal = async () => {
+    if (!goalForm.title || !goalForm.target_amount) return;
+    const res = await fetch("/api/goals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(goalForm),
+    });
+    const newGoal = await res.json();
+    setGoals((prev) => [newGoal, ...prev]);
+    setShowGoalModal(false);
+    setGoalForm({ title: "", target_amount: "", category_id: "", month: format(new Date(), "yyyy-MM") });
+  };
+
+  const deleteGoal = async (id: string) => {
+    await fetch("/api/goals", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    setGoals((prev) => prev.filter((g) => g.id !== id));
+  };
+
+  const overrideCategory = async (txn: Transaction, catId: string) => {
+    const cat = VIBE_CATEGORIES.find((c) => c.id === catId);
+    if (!cat) return;
+    await fetch(`/api/transactions/${txn.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category_id: cat.id,
+        category_name: cat.name,
+        category_emoji: cat.emoji,
+      }),
+    });
+    setTransactions((prev) =>
+      prev.map((t) =>
+        t.id === txn.id
+          ? { ...t, category_id: cat.id, category_name: cat.name, category_emoji: cat.emoji }
+          : t
+      )
+    );
+    setEditingCategoryTxn(null);
   };
 
   const completeOnboarding = async () => {
@@ -570,6 +756,28 @@ if (permission !== "granted") return;
   const credits = filteredCredits;
   const totalSpent = debits.reduce((s, t) => s + t.amount, 0);
   const totalReceived = credits.reduce((s, t) => s + t.amount, 0);
+
+  const vibeScore = (() => {
+    if (debits.length === 0) return null;
+
+    const savingsRate = totalReceived > 0 ? Math.max(0, (totalReceived - totalSpent) / totalReceived) : 0;
+    const savingsPoints = Math.round(savingsRate * 40);
+
+    const uniqueCategories = new Set(debits.map((t) => t.category_id)).size;
+    const diversityPoints = Math.min(uniqueCategories * 5, 30);
+
+    const uniqueDays = new Set(debits.map((t) => t.date)).size;
+    const daysInSelectedMonth = new Date(Number(selectedMonth.split("-")[0]), Number(selectedMonth.split("-")[1]), 0).getDate();
+    const consistencyPoints = Math.round((uniqueDays / daysInSelectedMonth) * 30);
+
+    return Math.min(savingsPoints + diversityPoints + consistencyPoints, 100);
+  })();
+
+  const vibeScoreLabel = vibeScore === null ? null
+    : vibeScore >= 80 ? { label: "Financially Sane", color: "text-emerald-600", emoji: "🏆" }
+    : vibeScore >= 60 ? { label: "On the Right Track", color: "text-blue-500", emoji: "📈" }
+    : vibeScore >= 40 ? { label: "Could Be Worse", color: "text-yellow-500", emoji: "😬" }
+    : { label: "Chaotic Era", color: "text-red-500", emoji: "💀" };
 
   // Category breakdown
   const categoryStats: CategoryStat[] = VIBE_CATEGORIES.slice(0, -1)
@@ -695,11 +903,11 @@ if (permission !== "granted") return;
               variant="outline"
               size="sm"
               onClick={() => handleSync()}
-              disabled={syncing}
+              disabled={syncing || syncCooldown > 0}
               className="gap-1.5 text-xs h-8 rounded-lg"
             >
               <RefreshCw className={`w-3 h-3 ${syncing ? "animate-spin" : ""}`} />
-              {syncing ? "Syncing…" : "Sync Gmail"}
+              {syncing ? "Syncing…" : syncCooldown > 0 ? `Wait ${syncCooldown}s` : "Sync Gmail"}
             </Button>
 
             {/* Export PDF — icon only on mobile, text on sm+ */}
@@ -773,6 +981,9 @@ if (permission !== "granted") return;
               <Sparkles className="w-4 h-4" />
               {generatingWrapped ? "Generating…" : "Get Vibe Report"}
             </Button>
+            <button onClick={() => router.push("/insights")} className="text-xs text-muted-foreground hover:text-foreground underline mt-2 sm:mt-0 sm:ml-3">
+              📊 Insights
+            </button>
             {wrappedError && <p className="text-xs text-red-500 mt-1">{wrappedError}</p>}
           </div>
         </div>
@@ -872,6 +1083,24 @@ if (permission !== "granted") return;
                   </div>
                 </CardContent>
               </Card>
+              {vibeScore !== null && vibeScoreLabel && (
+                <Card className="rounded-xl border-border/60">
+                  <CardContent className="p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-muted-foreground">Vibe Score</span>
+                      <span className="text-base">{vibeScoreLabel.emoji}</span>
+                    </div>
+                    <div className={`text-3xl font-bold tracking-tight ${vibeScoreLabel.color}`}>{vibeScore}</div>
+                    <div className="text-xs text-muted-foreground mt-1">{vibeScoreLabel.label}</div>
+                    <div className="w-full bg-secondary rounded-full h-1.5 mt-2">
+                      <div
+                        className={`h-1.5 rounded-full transition-all ${vibeScore >= 80 ? "bg-emerald-500" : vibeScore >= 60 ? "bg-blue-500" : vibeScore >= 40 ? "bg-yellow-500" : "bg-red-500"}`}
+                        style={{ width: `${vibeScore}%` }}
+                      />
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
               {/* Per-bank balance cards */}
               {bankBalances.length === 0 ? (
                 <Card className="rounded-xl border-border/60">
@@ -1013,6 +1242,59 @@ if (permission !== "granted") return;
           </CardContent>
         </Card>
 
+        {/* Savings Goals */}
+        {goals.length > 0 && (
+          <Card className="rounded-xl border-border/60">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between mb-4">
+                <span className="text-sm font-medium">🎯 Savings Goals</span>
+                <button onClick={() => setShowGoalModal(true)} className="text-xs text-muted-foreground hover:text-foreground">+ Add</button>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                {goals.map((g) => {
+                  const catSpent = g.category_id
+                    ? filteredDebits.filter((t) => t.category_id === g.category_id && t.date.startsWith(g.month)).reduce((s, t) => s + t.amount, 0)
+                    : totalSpent;
+                  const saved = Math.max(0, g.target_amount - catSpent);
+                  const pct = Math.min((saved / g.target_amount) * 100, 100);
+                  const radius = 30;
+                  const circ = 2 * Math.PI * radius;
+                  const dash = (pct / 100) * circ;
+                  return (
+                    <div key={g.id} className="flex flex-col items-center gap-2 relative group">
+                      <button onClick={() => deleteGoal(g.id)} className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 text-red-400 text-xs transition-opacity">✕</button>
+                      <svg width="80" height="80" className="-rotate-90">
+                        <circle cx="40" cy="40" r={radius} fill="none" stroke="hsl(var(--secondary))" strokeWidth="8" />
+                        <circle
+                          cx="40" cy="40" r={radius} fill="none"
+                          stroke={pct >= 100 ? "#10b981" : pct >= 50 ? "#f59e0b" : "#6366f1"}
+                          strokeWidth="8" strokeLinecap="round"
+                          strokeDasharray={`${dash} ${circ}`}
+                          style={{ transition: "stroke-dasharray 0.5s ease" }}
+                        />
+                      </svg>
+                      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center">
+                        <div className="text-xs font-bold">{Math.round(pct)}%</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xs font-medium">{g.title}</div>
+                        <div className="text-[10px] text-muted-foreground">{formatINR(Math.max(0, g.target_amount - (g.category_id ? filteredDebits.filter((t) => t.category_id === g.category_id && t.date.startsWith(g.month)).reduce((s, t) => s + t.amount, 0) : totalSpent)))} saved</div>
+                        <div className="text-[10px] text-muted-foreground">goal: {formatINR(g.target_amount)}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {goals.length === 0 && (
+          <button onClick={() => setShowGoalModal(true)} className="w-full rounded-xl border border-dashed border-border py-3 text-xs text-muted-foreground hover:bg-secondary transition-colors">
+            🎯 Set a savings goal
+          </button>
+        )}
+
         {budget && !loading && (
           <Card className={`rounded-xl border ${
             totalSpent >= budget ? "border-red-500/50 bg-red-500/5" :
@@ -1061,6 +1343,40 @@ if (permission !== "granted") return;
             </CardContent>
           </Card>
         )}
+
+        {/* Roast Mode */}
+        <Card className="rounded-xl border-border/60 bg-gradient-to-br from-orange-500/5 to-red-500/5">
+          <CardContent className="p-4">
+            {roastData ? (
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium">🔥 Your Vibe This Month</span>
+                  <button onClick={() => setRoastData(null)} className="text-xs text-muted-foreground hover:text-foreground">✕</button>
+                </div>
+                <div className="flex items-center gap-3 mb-2">
+                  <span className="text-3xl">{roastData.emoji}</span>
+                  <div>
+                    <div className="font-bold text-base">{roastData.title}</div>
+                    <div className="text-xs text-muted-foreground italic">{roastData.subtitle}</div>
+                  </div>
+                </div>
+                <div className="rounded-xl bg-background/60 border border-border/50 px-3 py-2 text-xs text-muted-foreground italic">
+                  💬 &ldquo;{roastData.roast}&rdquo;
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">🔥 Roast Mode</p>
+                  <p className="text-xs text-muted-foreground">Let AI judge your spending this month</p>
+                </div>
+                <Button size="sm" variant="outline" className="rounded-xl text-xs" onClick={fetchRoast} disabled={roastLoading || debits.length === 0}>
+                  {roastLoading ? "Judging…" : "Roast me 🫣"}
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Chart + Categories */}
         <div className="grid md:grid-cols-5 gap-4">
@@ -1182,174 +1498,97 @@ if (permission !== "granted") return;
             <div className="flex flex-col gap-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium">Recent Transactions</CardTitle>
-                {/* Fix 4: Show dateFilteredTransactions count */}
-                <span className="text-xs text-muted-foreground">
-                  {dateFilteredTransactions.length} of {transactions.length}
-                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowAddTxn(true)}
+                    className="text-xs px-2.5 py-1 rounded-lg bg-secondary border border-border hover:bg-muted transition-colors"
+                  >
+                    + Add
+                  </button>
+                  <span className="text-xs text-muted-foreground">
+                    {dateFilteredTransactions.length} of {transactions.length}
+                  </span>
+                </div>
               </div>
 
-              {/* Fix 4: Date filter — single date or from/to range */}
-              <div className="relative">
-                <button
-                  onClick={() => setShowDatePicker(!showDatePicker)}
-                  className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg border transition-colors ${
-                    dateFilterMode !== "none"
-                      ? "bg-foreground text-background border-foreground"
-                      : "border-border hover:bg-secondary"
-                  }`}
-                >
-                  <Calendar className="w-3 h-3" />
-                  {dateFilterMode === "single" && filterSingleDate
-                    ? format(new Date(filterSingleDate + "T00:00:00"), "dd MMM yyyy")
-                    : dateFilterMode === "range" && filterFromDate && filterToDate
-                    ? `${format(new Date(filterFromDate + "T00:00:00"), "dd MMM")} → ${format(new Date(filterToDate + "T00:00:00"), "dd MMM")}`
-                    : "Filter by date"}
-                  {dateFilterMode !== "none" && (
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDateFilterMode("none");
-                        setFilterSingleDate("");
-                        setFilterFromDate("");
-                        setFilterToDate("");
-                      }}
-                      className="ml-1 hover:text-red-400"
-                    >
-                      ×
-                    </span>
-                  )}
-                </button>
-
-                {showDatePicker && (
-                  <div className="absolute left-0 top-10 z-50 bg-card border border-border rounded-xl shadow-xl p-4 w-72 space-y-3">
-                    {/* Mode toggle */}
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => { setDateFilterMode("single"); setFilterFromDate(""); setFilterToDate(""); }}
-                        className={`flex-1 text-xs py-1.5 rounded-lg border transition-colors ${
-                          dateFilterMode === "single" ? "bg-foreground text-background border-foreground" : "border-border hover:bg-secondary"
-                        }`}
-                      >
-                        Single date
-                      </button>
-                      <button
-                        onClick={() => { setDateFilterMode("range"); setFilterSingleDate(""); }}
-                        className={`flex-1 text-xs py-1.5 rounded-lg border transition-colors ${
-                          dateFilterMode === "range" ? "bg-foreground text-background border-foreground" : "border-border hover:bg-secondary"
-                        }`}
-                      >
-                        From → To
-                      </button>
-                    </div>
-
-                    {/* Single date picker */}
-                    {dateFilterMode === "single" && (
-                      <input
-                        type="date"
-                        value={filterSingleDate}
-                        onChange={(e) => { setFilterSingleDate(e.target.value); setShowDatePicker(false); }}
-                        className="w-full text-xs bg-secondary border border-border rounded-lg px-3 py-2 text-foreground"
-                      />
-                    )}
-
-                    {/* Range picker */}
-                    {dateFilterMode === "range" && (
-                      <div className="space-y-2">
-                        <div>
-                          <label className="text-[10px] text-muted-foreground mb-1 block">From</label>
-                          <input
-                            type="date"
-                            value={filterFromDate}
-                            onChange={(e) => setFilterFromDate(e.target.value)}
-                            className="w-full text-xs bg-secondary border border-border rounded-lg px-3 py-2 text-foreground"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] text-muted-foreground mb-1 block">To</label>
-                          <input
-                            type="date"
-                            value={filterToDate}
-                            onChange={(e) => setFilterToDate(e.target.value)}
-                            className="w-full text-xs bg-secondary border border-border rounded-lg px-3 py-2 text-foreground"
-                          />
-                        </div>
-                        {filterFromDate && filterToDate && (
-                          <button
-                            onClick={() => setShowDatePicker(false)}
-                            className="w-full text-xs py-1.5 bg-foreground text-background rounded-lg"
-                          >
-                            Apply
-                          </button>
-                        )}
+              {/* Notification permission banner */}
+              {!pushEnabled && (
+                <div className="rounded-2xl bg-gradient-to-r from-violet-500/10 to-blue-500/10 border border-violet-500/20 p-4 mb-3">
+                  <div className="flex items-start gap-3">
+                    <span className="text-2xl">🔔</span>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold">Enable Alerts</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Get notified when you spend, hit 80% of your budget, or go 3 hours without activity.
+                      </p>
+                      <div className="flex gap-2 mt-2">
+                        <button
+                          onClick={enablePush}
+                          className="text-xs bg-violet-500 hover:bg-violet-600 text-white rounded-lg px-3 py-1.5 font-medium transition-colors"
+                        >
+                          Turn on notifications
+                        </button>
+                        <a
+                          href="https://support.google.com/chrome/answer/3220216"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-muted-foreground underline self-center"
+                        >
+                          Need help?
+                        </a>
                       </div>
-                    )}
+                    </div>
                   </div>
-                )}
-              </div>
+                </div>
+              )}
 
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                <input
-                  type="text"
-                  placeholder="Search merchant, VPA, category…"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-8 pr-4 py-2 text-xs bg-secondary border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-foreground/20"
-                />
-                {searchQuery && (
-                  <button
-                    onClick={() => setSearchQuery("")}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                {(["all", "debit", "credit"] as const).map((type) => (
-                  <button
-                    key={type}
-                    onClick={() => setFilterType(type)}
-                    className={`text-xs px-2.5 py-1 rounded-full border transition-colors capitalize ${
-                      filterType === type
-                        ? "bg-foreground text-background border-foreground"
-                        : "border-border hover:bg-secondary"
-                    }`}
-                  >
-                    {type === "debit" ? "💸 Spent" : type === "credit" ? "📥 Received" : "All"}
-                  </button>
-                ))}
-                <div className="h-3 w-px bg-border" />
+              {/* Consolidated filter bar */}
+              <div className="flex flex-wrap gap-2 items-center mb-3">
+                <div className="relative flex-1 min-w-[140px]">
+                  <Search className="absolute left-2 top-2.5 w-3.5 h-3.5 text-muted-foreground" />
+                  <input
+                    className="w-full pl-7 pr-2 py-1.5 text-xs rounded-lg bg-secondary border-0 outline-none"
+                    placeholder="Search..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+
                 <select
+                  className="text-xs rounded-lg bg-secondary px-2 py-1.5 border-0 outline-none"
+                  value={filterType}
+                  onChange={(e) => setFilterType(e.target.value as "all" | "debit" | "credit")}
+                >
+                  <option value="all">All types</option>
+                  <option value="debit">Spent</option>
+                  <option value="credit">Received</option>
+                </select>
+
+                <select
+                  className="text-xs rounded-lg bg-secondary px-2 py-1.5 border-0 outline-none"
                   value={filterCategory}
                   onChange={(e) => setFilterCategory(e.target.value)}
-                  className="text-xs bg-secondary border border-border rounded-full px-2.5 py-1 text-foreground cursor-pointer"
                 >
-                  <option value="all">All vibes</option>
-                  {VIBE_CATEGORIES.slice(0, -1).map((cat) => (
-                    <option key={cat.id} value={cat.id}>
-                      {cat.emoji} {cat.name}
-                    </option>
+                  <option value="all">All categories</option>
+                  {VIBE_CATEGORIES.map((c) => (
+                    <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>
                   ))}
                 </select>
-                {Array.from(new Set(transactions.map((t) => t.source))).length > 1 && (
-                  <select
-                    value={filterBank}
-                    onChange={(e) => setFilterBank(e.target.value)}
-                    className="text-xs bg-secondary border border-border rounded-full px-2.5 py-1 text-foreground cursor-pointer"
-                  >
-                    <option value="all">All Banks</option>
-                    {Array.from(new Set(transactions.map((t) => t.source))).map((src) => (
-                      <option key={src} value={src}>{src}</option>
-                    ))}
-                  </select>
-                )}
-                {!pushEnabled && (
+
+                <input
+                  type="month"
+                  className="text-xs rounded-lg bg-secondary px-2 py-1.5 border-0 outline-none"
+                  value={selectedMonth}
+                  max={format(new Date(), "yyyy-MM")}
+                  onChange={(e) => setSelectedMonth(e.target.value)}
+                />
+
+                {(searchQuery || filterCategory !== "all" || filterType !== "all") && (
                   <button
-                    onClick={enablePush}
-                    className="text-xs px-2.5 py-1 rounded-full border border-border hover:bg-secondary transition-colors"
+                    onClick={() => { setSearchQuery(""); setFilterCategory("all"); setFilterType("all"); }}
+                    className="text-xs text-muted-foreground hover:text-foreground"
                   >
-                    🔔 Enable alerts
+                    ✕ Clear
                   </button>
                 )}
               </div>
@@ -1376,11 +1615,35 @@ if (permission !== "granted") return;
                       {/* Details */}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium truncate">{t.merchant}</span>
+                          <span className="font-medium text-sm">
+                            {t.merchant}
+                            {recurringMerchants.some(
+                              (r) => r.merchant.toLowerCase() === t.merchant.toLowerCase()
+                            ) && (
+                              <span className="ml-1 text-[10px] text-blue-400" title="Recurring">🔁</span>
+                            )}
+                          </span>
+                          <button
+                            onClick={() => setEditingCategoryTxn(t)}
+                            className="text-[10px] text-muted-foreground hover:text-foreground ml-1 opacity-50 hover:opacity-100"
+                          >
+                            ✏️
+                          </button>
                           <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 rounded-md">
                             {t.category_name}
                           </Badge>
                         </div>
+                        {editingCategoryTxn?.id === t.id && (
+                          <select
+                            className="text-xs mt-1 bg-background border rounded px-1"
+                            defaultValue={t.category_id}
+                            onChange={(e) => overrideCategory(t, e.target.value)}
+                          >
+                            {VIBE_CATEGORIES.map((c) => (
+                              <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>
+                            ))}
+                          </select>
+                        )}
                         <div className="flex items-center gap-2 mt-0.5">
                           <span className="text-xs text-muted-foreground">
                             <Calendar className="w-3 h-3 inline mr-1" />
@@ -1416,6 +1679,15 @@ if (permission !== "granted") return;
                           title="Split this"
                         >
                           👥
+                        </button>
+                      )}
+                      {t.source === "manual" && (
+                        <button
+                          onClick={() => deleteManualTxn(t.id)}
+                          className="text-[10px] px-2 py-1 rounded-lg border border-red-500/30 hover:bg-red-500/10 text-red-400 flex-shrink-0"
+                          title="Delete manual transaction"
+                        >
+                          🗑️
                         </button>
                       )}
                     </div>
@@ -1573,6 +1845,108 @@ if (permission !== "granted") return;
             <div className="flex gap-2">
               <Button variant="outline" className="flex-1 rounded-xl" onClick={() => setSplitTxn(null)}>Cancel</Button>
               <Button className="flex-1 rounded-xl" onClick={addSplit} disabled={!splitName || !splitAmount}>Add Split</Button>
+            </div>
+            {splitError && (
+              <p className="text-xs text-red-500 mt-1 text-center">{splitError}</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showAddTxn && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-sm mx-4 shadow-xl">
+            <h2 className="text-lg font-bold mb-4">➕ Add Transaction</h2>
+
+            <div className="space-y-3">
+              <input
+                type="text" placeholder="Merchant / Description *"
+                value={addTxnForm.merchant}
+                onChange={(e) => setAddTxnForm((f) => ({ ...f, merchant: e.target.value }))}
+                className="w-full px-3 py-2.5 text-sm bg-background border border-border rounded-xl focus:outline-none"
+              />
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">₹</span>
+                  <input
+                    type="number" placeholder="Amount *"
+                    value={addTxnForm.amount}
+                    onChange={(e) => setAddTxnForm((f) => ({ ...f, amount: e.target.value }))}
+                    className="w-full pl-7 pr-3 py-2.5 text-sm bg-background border border-border rounded-xl focus:outline-none"
+                  />
+                </div>
+                <select
+                  value={addTxnForm.type}
+                  onChange={(e) => setAddTxnForm((f) => ({ ...f, type: e.target.value as "debit" | "credit" }))}
+                  className="text-sm bg-background border border-border rounded-xl px-2 focus:outline-none"
+                >
+                  <option value="debit">Spent</option>
+                  <option value="credit">Received</option>
+                </select>
+              </div>
+              <input
+                type="date"
+                value={addTxnForm.date}
+                onChange={(e) => setAddTxnForm((f) => ({ ...f, date: e.target.value }))}
+                className="w-full px-3 py-2.5 text-sm bg-background border border-border rounded-xl focus:outline-none"
+              />
+              <select
+                value={addTxnForm.category_id}
+                onChange={(e) => setAddTxnForm((f) => ({ ...f, category_id: e.target.value }))}
+                className="w-full text-sm bg-background border border-border rounded-xl px-3 py-2.5 focus:outline-none"
+              >
+                <option value="">Auto-detect category</option>
+                {VIBE_CATEGORIES.map((c) => (
+                  <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>
+                ))}
+              </select>
+              <input
+                type="text" placeholder="Note (optional)"
+                value={addTxnForm.note}
+                onChange={(e) => setAddTxnForm((f) => ({ ...f, note: e.target.value }))}
+                className="w-full px-3 py-2.5 text-sm bg-background border border-border rounded-xl focus:outline-none"
+              />
+            </div>
+
+            {addTxnError && <p className="text-xs text-red-500 mt-2">{addTxnError}</p>}
+
+            <div className="flex gap-2 mt-4">
+              <Button variant="outline" className="flex-1 rounded-xl" onClick={() => { setShowAddTxn(false); setAddTxnError(""); }}>
+                Cancel
+              </Button>
+              <Button className="flex-1 rounded-xl" onClick={submitManualTxn} disabled={addTxnLoading}>
+                {addTxnLoading ? "Saving…" : "Add Transaction"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showGoalModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-sm mx-4 shadow-xl">
+            <h2 className="text-lg font-bold mb-4">🎯 New Savings Goal</h2>
+            <div className="space-y-3">
+              <input type="text" placeholder="Goal name (e.g. No food delivery month)"
+                value={goalForm.title} onChange={(e) => setGoalForm((f) => ({ ...f, title: e.target.value }))}
+                className="w-full px-3 py-2.5 text-sm bg-background border border-border rounded-xl focus:outline-none" />
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">₹</span>
+                <input type="number" placeholder="Target amount to save"
+                  value={goalForm.target_amount} onChange={(e) => setGoalForm((f) => ({ ...f, target_amount: e.target.value }))}
+                  className="w-full pl-7 pr-3 py-2.5 text-sm bg-background border border-border rounded-xl focus:outline-none" />
+              </div>
+              <select value={goalForm.category_id} onChange={(e) => setGoalForm((f) => ({ ...f, category_id: e.target.value }))}
+                className="w-full text-sm bg-background border border-border rounded-xl px-3 py-2.5 focus:outline-none">
+                <option value="">Track overall spending</option>
+                {VIBE_CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>)}
+              </select>
+              <input type="month" value={goalForm.month} onChange={(e) => setGoalForm((f) => ({ ...f, month: e.target.value }))}
+                className="w-full px-3 py-2.5 text-sm bg-background border border-border rounded-xl focus:outline-none" />
+            </div>
+            <div className="flex gap-2 mt-4">
+              <Button variant="outline" className="flex-1 rounded-xl" onClick={() => setShowGoalModal(false)}>Cancel</Button>
+              <Button className="flex-1 rounded-xl" onClick={addGoal} disabled={!goalForm.title || !goalForm.target_amount}>Create Goal</Button>
             </div>
           </div>
         </div>
