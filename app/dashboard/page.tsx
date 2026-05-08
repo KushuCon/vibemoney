@@ -11,7 +11,7 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   RefreshCw, LogOut, Sparkles, TrendingDown, TrendingUp,
-  ArrowDownRight, ArrowUpLeft, Calendar, Search
+  ArrowDownRight, ArrowUpLeft, Calendar, Search, BarChart2, CandlestickChart
 } from "lucide-react";
 import { VIBE_CATEGORIES } from "@/lib/vibe-categories";
 import { WrappedModal } from "@/components/wrapped-modal";
@@ -981,9 +981,15 @@ useEffect(() => {
               <Sparkles className="w-4 h-4" />
               {generatingWrapped ? "Generating…" : "Get Vibe Report"}
             </Button>
-            <button onClick={() => router.push("/insights")} className="text-xs text-muted-foreground hover:text-foreground underline mt-2 sm:mt-0 sm:ml-3">
-              📊 Insights
-            </button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => router.push("/insights")}
+              className="gap-1.5 text-xs mt-2 rounded-xl border-border/60 hover:bg-muted"
+            >
+              <BarChart2 className="w-3.5 h-3.5" />
+              Insights
+            </Button>
             {wrappedError && <p className="text-xs text-red-500 mt-1">{wrappedError}</p>}
           </div>
         </div>
@@ -1160,6 +1166,20 @@ useEffect(() => {
                   </CardContent>
                 </Card>
               )}
+              {/* Trades / Equity card */}
+              <Card
+                className="rounded-xl border-border/60 cursor-pointer hover:bg-muted/40 transition-colors group"
+                onClick={() => router.push("/trades")}
+              >
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs text-muted-foreground">Equity</span>
+                    <CandlestickChart className="w-3.5 h-3.5 text-blue-400 group-hover:text-blue-300 transition-colors" />
+                  </div>
+                  <div className="text-sm font-semibold leading-tight">Trades</div>
+                  <div className="text-xs text-muted-foreground mt-1">View INDmoney →</div>
+                </CardContent>
+              </Card>
             </>
           )}
         </div>

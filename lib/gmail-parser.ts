@@ -39,6 +39,8 @@ export const BANK_SENDERS = [
   "esfb-alerts@equitasbank.com",
   // Groww (likely sender - verify with real email)
   "no-reply@groww.in",
+  // INDmoney US stocks
+  "transactions@transactions.indmoney.com",
 ];
 
 export function buildGmailQuery(daysBack = 90): string {
@@ -321,6 +323,26 @@ if (sender.includes("zerodha")) {
       raw_subject: subject,
       email_id: emailId,
       source: "Groww",
+    };
+  }
+
+  // ── INDMONEY ──────────────────────────────────────────────────────────────
+  if (sender.includes("indmoney")) {
+    const buyMatch = subject.match(/^BUY order of (.+?) for \$([0-9.]+) is successful/i);
+    const sellMatch = subject.match(/^SELL order of (.+?) for \$([0-9.]+) is successful/i);
+    if (!buyMatch && !sellMatch) return null;
+    const match = buyMatch || sellMatch!;
+    const amountUSD = parseFloat(match[2]);
+    if (amountUSD <= 0) return null;
+    return {
+      amount: amountUSD,
+      type: buyMatch ? "debit" : "credit",
+      merchant: match[1].trim(),
+      description: subject.substring(0, 100),
+      date: emailDate,
+      raw_subject: subject,
+      email_id: emailId,
+      source: "INDmoney",
     };
   }
 
