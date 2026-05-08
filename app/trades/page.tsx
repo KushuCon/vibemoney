@@ -7,7 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, TrendingUp, TrendingDown, DollarSign, BarChart2 } from "lucide-react";
+import { ArrowLeft, TrendingUp, TrendingDown, DollarSign, Hash } from "lucide-react";
 import { format } from "date-fns";
 
 interface Trade {
@@ -17,17 +17,6 @@ interface Trade {
   type: "debit" | "credit";
   date: string;
   raw_subject: string;
-  description: string;
-}
-
-interface StockSummary {
-  stock: string;
-  bought: number;
-  sold: number;
-  buyCount: number;
-  sellCount: number;
-  realisedPnL: number;
-  netInvested: number;
 }
 
 interface Totals {
@@ -35,17 +24,24 @@ interface Totals {
   totalSold: number;
   totalTrades: number;
   netInvested: number;
-  realisedPnL: number;
 }
 
 export default function TradesPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [trades, setTrades] = useState<Trade[]>([]);
-  const [summary, setSummary] = useState<StockSummary[]>([]);
   const [totals, setTotals] = useState<Totals | null>(null);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<"summary" | "history">("summary");
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("theme") === "dark";
+  });
+
+  // Sync dark mode with dashboard — same logic
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", isDark);
+    localStorage.setItem("theme", isDark ? "dark" : "light");
+  }, [isDark]);
 
   useEffect(() => {
     if (status === "unauthenticated") router.push("/");
@@ -57,14 +53,17 @@ export default function TradesPage() {
       .then((r) => r.json())
       .then((d) => {
         setTrades(d.trades || []);
-        setSummary(d.summary || []);
         setTotals(d.totals || null);
       })
       .finally(() => setLoading(false));
   }, [status]);
 
   const fmt = (n: number) =>
-    new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 }).format(n);
+    new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 2,
+    }).format(n);
 
   if (status === "loading" || loading) {
     return (
@@ -74,36 +73,57 @@ export default function TradesPage() {
           <Skeleton className="w-40 h-6" />
         </div>
         <div className="grid grid-cols-2 gap-3 mb-6">
-          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-24 rounded-xl" />
+          ))}
         </div>
         <div className="space-y-2">
-          {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16 rounded-xl" />)}
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-16 rounded-xl" />
+          ))}
         </div>
       </div>
     );
   }
 
-  const pnlColor = (n: number) => n > 0 ? "text-emerald-500" : n < 0 ? "text-red-500" : "text-muted-foreground";
-  const pnlPrefix = (n: number) => n > 0 ? "+" : "";
-
   return (
     <div className="min-h-screen bg-background">
+      {/* Header — matches dashboard style */}
+      <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-xl">
+        <div className="max-w-2xl mx-auto px-4 h-14 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="rounded-xl h-8 w-8"
+              onClick={() => router.push("/dashboard")}
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </Button>
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-foreground flex items-center justify-center">
+                <span className="text-background text-xs font-bold">V</span>
+              </div>
+              <span className="font-semibold text-sm tracking-tight">Equity Trades</span>
+            </div>
+          </div>
+          {/* Dark/light toggle — same as dashboard */}
+          <button
+            onClick={() => setIsDark(!isDark)}
+            className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-secondary transition-colors"
+            title={isDark ? "Switch to light" : "Switch to dark"}
+          >
+            <span>{isDark ? "☀️" : "🌙"}</span>
+            <span className="hidden sm:inline">{isDark ? " Light" : " Dark"}</span>
+          </button>
+        </div>
+      </header>
+
       <div className="max-w-2xl mx-auto p-4 pb-16 space-y-5">
 
-        {/* Header */}
-        <div className="flex items-center gap-3 pt-2">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="rounded-xl h-9 w-9"
-            onClick={() => router.push("/dashboard")}
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </Button>
-          <div>
-            <h1 className="text-lg font-bold tracking-tight">Equity Trades</h1>
-            <p className="text-xs text-muted-foreground">INDmoney US stocks — all time</p>
-          </div>
+        {/* Subtitle */}
+        <div>
+          <p className="text-xs text-muted-foreground">INDmoney US stocks · all time history</p>
         </div>
 
         {/* No trades state */}
@@ -112,16 +132,18 @@ export default function TradesPage() {
             <CardContent className="p-8 text-center">
               <div className="text-4xl mb-3">📈</div>
               <div className="font-semibold mb-1">No trades found</div>
-              <div className="text-sm text-muted-foreground">
-                Sync your Gmail to fetch INDmoney trade emails.
-                Make sure you&apos;ve signed in and synced at least once.
+              <div className="text-sm text-muted-foreground mb-4">
+                Run the one-time history sync from your browser console while logged in:
               </div>
+              <code className="text-xs bg-secondary px-3 py-2 rounded-lg block text-left">
+                fetch(&quot;/api/trades/sync-history&quot;, &#123;method:&quot;POST&quot;&#125;).then(r=&gt;r.json()).then(console.log)
+              </code>
               <Button
                 variant="outline"
                 className="mt-4 rounded-xl"
                 onClick={() => router.push("/dashboard")}
               >
-                Go sync Gmail
+                ← Back to dashboard
               </Button>
             </CardContent>
           </Card>
@@ -129,7 +151,7 @@ export default function TradesPage() {
 
         {totals && trades.length > 0 && (
           <>
-            {/* Stat cards */}
+            {/* Stat cards — 4 simple ones, no P&L */}
             <div className="grid grid-cols-2 gap-3">
               <Card className="rounded-xl border-border/60">
                 <CardContent className="p-4">
@@ -138,7 +160,7 @@ export default function TradesPage() {
                     <TrendingDown className="w-3.5 h-3.5 text-red-400" />
                   </div>
                   <div className="text-xl font-bold tracking-tight">{fmt(totals.totalBought)}</div>
-                  <div className="text-xs text-muted-foreground mt-1">{totals.totalTrades} trades total</div>
+                  <div className="text-xs text-muted-foreground mt-1">invested in</div>
                 </CardContent>
               </Card>
 
@@ -156,128 +178,90 @@ export default function TradesPage() {
               <Card className="rounded-xl border-border/60">
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs text-muted-foreground">Net Invested</span>
+                    <span className="text-xs text-muted-foreground">Still Holding</span>
                     <DollarSign className="w-3.5 h-3.5 text-blue-400" />
                   </div>
                   <div className="text-xl font-bold tracking-tight">{fmt(totals.netInvested)}</div>
-                  <div className="text-xs text-muted-foreground mt-1">still in market</div>
+                  <div className="text-xs text-muted-foreground mt-1">in market (cost basis)</div>
                 </CardContent>
               </Card>
 
-              <Card className={`rounded-xl border-border/60 ${totals.realisedPnL > 0 ? "border-emerald-500/30" : totals.realisedPnL < 0 ? "border-red-500/30" : ""}`}>
+              <Card className="rounded-xl border-border/60">
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs text-muted-foreground">Realised P&amp;L</span>
-                    <BarChart2 className="w-3.5 h-3.5 text-muted-foreground" />
+                    <span className="text-xs text-muted-foreground">Total Trades</span>
+                    <Hash className="w-3.5 h-3.5 text-muted-foreground" />
                   </div>
-                  <div className={`text-xl font-bold tracking-tight ${pnlColor(totals.realisedPnL)}`}>
-                    {pnlPrefix(totals.realisedPnL)}{fmt(totals.realisedPnL)}
+                  <div className="text-xl font-bold tracking-tight">{totals.totalTrades}</div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {trades.filter(t => t.type === "debit").length} buys ·{" "}
+                    {trades.filter(t => t.type === "credit").length} sells
                   </div>
-                  <div className="text-xs text-muted-foreground mt-1">sold − bought</div>
                 </CardContent>
               </Card>
             </div>
 
-            {/* View toggle */}
-            <div className="flex gap-2">
-              <button
-                onClick={() => setView("summary")}
-                className={`text-xs px-4 py-1.5 rounded-full border transition-colors ${view === "summary" ? "bg-foreground text-background border-foreground" : "border-border hover:bg-secondary"}`}
-              >
-                By Stock
-              </button>
-              <button
-                onClick={() => setView("history")}
-                className={`text-xs px-4 py-1.5 rounded-full border transition-colors ${view === "history" ? "bg-foreground text-background border-foreground" : "border-border hover:bg-secondary"}`}
-              >
-                All Trades
-              </button>
-            </div>
+            {/* Trade history list */}
+            <Card className="rounded-xl border-border/60">
+              <CardContent className="px-0 py-2">
+                <div className="px-4 py-3 border-b border-border/50">
+                  <span className="text-sm font-medium">All Trades</span>
+                  <span className="text-xs text-muted-foreground ml-2">{trades.length} orders</span>
+                </div>
+                <div className="divide-y divide-border/50">
+                  {trades.map((t) => (
+                    <div key={t.id} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors">
+                      {/* B / S badge */}
+                      <div
+                        className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 text-xs font-bold ${
+                          t.type === "debit"
+                            ? "bg-red-500/10 text-red-400"
+                            : "bg-emerald-500/10 text-emerald-400"
+                        }`}
+                      >
+                        {t.type === "debit" ? "B" : "S"}
+                      </div>
 
-            {/* Summary view — grouped by stock */}
-            {view === "summary" && (
-              <div className="space-y-2">
-                {summary.map((s) => (
-                  <Card key={s.stock} className="rounded-xl border-border/60">
-                    <CardContent className="p-4">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0">
-                          <div className="font-medium text-sm truncate">{s.stock}</div>
-                          <div className="text-xs text-muted-foreground mt-0.5">
-                            {s.buyCount} buy{s.buyCount !== 1 ? "s" : ""} · {s.sellCount} sell{s.sellCount !== 1 ? "s" : ""}
-                          </div>
-                        </div>
-                        <div className="text-right ml-3 shrink-0">
-                          <div className={`text-sm font-semibold ${pnlColor(s.realisedPnL)}`}>
-                            {pnlPrefix(s.realisedPnL)}{fmt(s.realisedPnL)}
-                          </div>
-                          <div className="text-xs text-muted-foreground mt-0.5">
-                            {fmt(s.bought)} in
-                          </div>
+                      {/* Stock name + date */}
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{t.merchant}</div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          {format(new Date(t.date + "T00:00:00"), "dd MMM yyyy")}
                         </div>
                       </div>
-                      {/* Mini bar showing bought vs sold */}
-                      {s.bought > 0 && (
-                        <div className="mt-3 flex gap-1 items-center">
-                          <div className="flex-1 bg-muted rounded-full h-1.5 overflow-hidden">
-                            <div
-                              className="h-1.5 bg-red-400 rounded-full"
-                              style={{ width: `${Math.min(100, (s.bought / Math.max(s.bought, s.sold)) * 100)}%` }}
-                            />
-                          </div>
-                          <div className="flex-1 bg-muted rounded-full h-1.5 overflow-hidden">
-                            <div
-                              className="h-1.5 bg-emerald-400 rounded-full"
-                              style={{ width: `${Math.min(100, (s.sold / Math.max(s.bought, s.sold)) * 100)}%` }}
-                            />
-                          </div>
-                          <span className="text-xs text-muted-foreground ml-1">B/S</span>
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            )}
 
-            {/* History view — all individual trades */}
-            {view === "history" && (
-              <div className="space-y-2">
-                {trades.map((t) => (
-                  <Card key={t.id} className="rounded-xl border-border/60">
-                    <CardContent className="p-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3 flex-1 min-w-0">
-                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-xs font-bold ${t.type === "debit" ? "bg-red-500/10 text-red-400" : "bg-emerald-500/10 text-emerald-400"}`}>
-                            {t.type === "debit" ? "B" : "S"}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="text-sm font-medium truncate">{t.merchant}</div>
-                            <div className="text-xs text-muted-foreground">
-                              {format(new Date(t.date), "dd MMM yyyy")}
-                            </div>
-                          </div>
+                      {/* Amount + badge */}
+                      <div className="text-right shrink-0">
+                        <div
+                          className={`text-sm font-semibold ${
+                            t.type === "debit" ? "text-red-400" : "text-emerald-400"
+                          }`}
+                        >
+                          {t.type === "debit" ? "-" : "+"}{fmt(Number(t.amount))}
                         </div>
-                        <div className="text-right shrink-0 ml-3">
-                          <div className={`text-sm font-semibold ${t.type === "debit" ? "text-red-400" : "text-emerald-400"}`}>
-                            {t.type === "debit" ? "-" : "+"}{fmt(Number(t.amount))}
-                          </div>
-                          <Badge
-                            variant="outline"
-                            className={`text-xs mt-0.5 ${t.type === "debit" ? "border-red-500/30 text-red-400" : "border-emerald-500/30 text-emerald-400"}`}
-                          >
-                            {t.type === "debit" ? "BUY" : "SELL"}
-                          </Badge>
-                        </div>
+                        <Badge
+                          variant="outline"
+                          className={`text-[10px] mt-0.5 ${
+                            t.type === "debit"
+                              ? "border-red-500/30 text-red-400"
+                              : "border-emerald-500/30 text-emerald-400"
+                          }`}
+                        >
+                          {t.type === "debit" ? "BUY" : "SELL"}
+                        </Badge>
                       </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            )}
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
           </>
         )}
       </div>
+
+      <footer className="pb-6 text-center text-xs text-muted-foreground">
+        © 2026 VibeWallet · INDmoney US Stocks
+      </footer>
     </div>
   );
 }
