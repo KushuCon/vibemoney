@@ -335,7 +335,7 @@ if (sender.includes("zerodha")) {
     lower.includes("imps dr") ||
     lower.includes("rs..*has been debited") ||
     lower.includes("rs..*debited from account") ||
-    lower.includes("has been debited from")
+    lower.includes("has been debited from") ||
     lower.includes("is debited from your account") ||     // ← ADD THIS
   lower.includes("is debited from your a/c") ||         // ← ADD THIS
   lower.includes("towards vpa");   
