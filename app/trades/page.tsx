@@ -7,7 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, TrendingUp, TrendingDown, DollarSign, Hash } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { format } from "date-fns";
 
 interface Trade {
@@ -19,18 +19,10 @@ interface Trade {
   raw_subject: string;
 }
 
-interface Totals {
-  totalBought: number;
-  totalSold: number;
-  totalTrades: number;
-  netInvested: number;
-}
-
 export default function TradesPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [trades, setTrades] = useState<Trade[]>([]);
-  const [totals, setTotals] = useState<Totals | null>(null);
   const [loading, setLoading] = useState(true);
   const [isDark, setIsDark] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -53,17 +45,9 @@ export default function TradesPage() {
       .then((r) => r.json())
       .then((d) => {
         setTrades(d.trades || []);
-        setTotals(d.totals || null);
       })
       .finally(() => setLoading(false));
   }, [status]);
-
-  const fmt = (n: number) =>
-    new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: "USD",
-      minimumFractionDigits: 2,
-    }).format(n);
 
   if (status === "loading" || loading) {
     return (
@@ -149,58 +133,8 @@ export default function TradesPage() {
           </Card>
         )}
 
-        {totals && trades.length > 0 && (
+        {trades.length > 0 && (
           <>
-            {/* Stat cards — 4 simple ones, no P&L */}
-            <div className="grid grid-cols-2 gap-3">
-              <Card className="rounded-xl border-border/60">
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs text-muted-foreground">Total Bought</span>
-                    <TrendingDown className="w-3.5 h-3.5 text-red-400" />
-                  </div>
-                  <div className="text-xl font-bold tracking-tight">{fmt(totals.totalBought)}</div>
-                  <div className="text-xs text-muted-foreground mt-1">invested in</div>
-                </CardContent>
-              </Card>
-
-              <Card className="rounded-xl border-border/60">
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs text-muted-foreground">Total Sold</span>
-                    <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
-                  </div>
-                  <div className="text-xl font-bold tracking-tight">{fmt(totals.totalSold)}</div>
-                  <div className="text-xs text-muted-foreground mt-1">realised proceeds</div>
-                </CardContent>
-              </Card>
-
-              <Card className="rounded-xl border-border/60">
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs text-muted-foreground">Still Holding</span>
-                    <DollarSign className="w-3.5 h-3.5 text-blue-400" />
-                  </div>
-                  <div className="text-xl font-bold tracking-tight">{fmt(totals.netInvested)}</div>
-                  <div className="text-xs text-muted-foreground mt-1">in market (cost basis)</div>
-                </CardContent>
-              </Card>
-
-              <Card className="rounded-xl border-border/60">
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs text-muted-foreground">Total Trades</span>
-                    <Hash className="w-3.5 h-3.5 text-muted-foreground" />
-                  </div>
-                  <div className="text-xl font-bold tracking-tight">{totals.totalTrades}</div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    {trades.filter(t => t.type === "debit").length} buys ·{" "}
-                    {trades.filter(t => t.type === "credit").length} sells
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
             {/* Trade history list */}
             <Card className="rounded-xl border-border/60">
               <CardContent className="px-0 py-2">
