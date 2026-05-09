@@ -17,6 +17,7 @@ export async function GET(req: NextRequest) {
     .from("transactions")
     .select("*")
     .eq("user_email", session.user.email)
+    .neq("source", "INDmoney") 
     .order("date", { ascending: false });
 
   if (month) {
