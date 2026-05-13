@@ -11,7 +11,7 @@ export async function GET() {
 
   const { data, error } = await supabaseAdmin
     .from("users")
-    .select("monthly_budget, sync_from_date, primary_bank, onboarding_done, portfolio_invested, portfolio_current_value")
+    .select("monthly_budget, sync_from_date, primary_bank, onboarding_done, portfolio_invested, portfolio_current_value, portfolio_in_hand_cash")
     .eq("email", session.user.email)
     .single();
 
@@ -22,7 +22,7 @@ export async function GET() {
     .order("updated_at", { ascending: false });
 
   if (error) {
-    return NextResponse.json({ budget: null, bankBalances: [], syncFromDate: null, primaryBank: null, portfolioInvested: null, portfolioCurrentValue: null });
+    return NextResponse.json({ budget: null, bankBalances: [], syncFromDate: null, primaryBank: null, portfolioInvested: null, portfolioCurrentValue: null, portfolioInHandCash: null });
   }
 
   return NextResponse.json({
@@ -33,6 +33,7 @@ export async function GET() {
     onboardingDone: data?.onboarding_done ?? false,
     portfolioInvested: data?.portfolio_invested ?? null,
     portfolioCurrentValue: data?.portfolio_current_value ?? null,
+    portfolioInHandCash: data?.portfolio_in_hand_cash ?? null,
   });
 }
 
@@ -62,13 +63,14 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
-  const { primaryBank, onboardingDone, portfolioInvested, portfolioCurrentValue } = await req.json();
+  const { primaryBank, onboardingDone, portfolioInvested, portfolioCurrentValue, portfolioInHandCash } = await req.json();
 
   const update: Record<string, unknown> = {};
   if (primaryBank !== undefined) update.primary_bank = primaryBank;
   if (onboardingDone !== undefined) update.onboarding_done = onboardingDone;
   if (portfolioInvested !== undefined) update.portfolio_invested = portfolioInvested;
   if (portfolioCurrentValue !== undefined) update.portfolio_current_value = portfolioCurrentValue;
+  if (portfolioInHandCash !== undefined) update.portfolio_in_hand_cash = portfolioInHandCash;
 
   await supabaseAdmin
     .from("users")

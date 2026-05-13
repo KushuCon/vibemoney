@@ -210,22 +210,24 @@ async function sendVibeNotification(
   if (credits.length > 0) {
     // 💰 Money came in — HYPE them up
     const txn = credits[0];
+    const isINDmoney = (txn as unknown as Record<string,unknown>).source === "INDmoney";
+    const symbol = isINDmoney ? "$" : "₹";
     const msgs = [
       {
         t: "VibeWallet 💰",
-        b: `Congrats, you just got loaded! ₹${txn.amount} incoming from ${txn.merchant} ${txn.category_emoji}`,
+        b: `Congrats, you just got loaded! ${symbol}${txn.amount} incoming from ${txn.merchant} ${txn.category_emoji}`,
       },
       {
         t: "VibeWallet 🤑",
-        b: `MONEY IN THE BANK! ₹${txn.amount} from ${txn.merchant}. Don't spend it all at once 👀`,
+        b: `MONEY IN THE BANK! ${symbol}${txn.amount} from ${txn.merchant}. Don't spend it all at once 👀`,
       },
       {
         t: "VibeWallet 📈",
-        b: `₹${txn.amount} just landed from ${txn.merchant}. Main character energy unlocked.`,
+        b: `${symbol}${txn.amount} just landed from ${txn.merchant}. Main character energy unlocked.`,
       },
       {
         t: "VibeWallet 🎉",
-        b: `Cha-ching! ₹${txn.amount} received from ${txn.merchant}. You ate today.`,
+        b: `Cha-ching! ${symbol}${txn.amount} received from ${txn.merchant}. You ate today.`,
       },
     ];
     const pick = msgs[Math.floor(Math.random() * msgs.length)];
@@ -234,22 +236,24 @@ async function sendVibeNotification(
   } else if (debits.length > 0) {
     // 💸 Money went out — roast them
     const txn = debits[0];
+    const isINDmoney = (txn as unknown as Record<string,unknown>).source === "INDmoney";
+    const symbol = isINDmoney ? "$" : "₹";
     const msgs = [
       {
         t: "VibeWallet 💸",
-        b: `U gonna go broke sweetie 😭 ₹${txn.amount} at ${txn.merchant} ${txn.category_emoji}`,
+        b: `U gonna go broke sweetie 😭 ${symbol}${txn.amount} at ${txn.merchant} ${txn.category_emoji}`,
       },
       {
         t: "VibeWallet 🫠",
-        b: `₹${txn.amount} gone at ${txn.merchant}. Your bank account felt that.`,
+        b: `${symbol}${txn.amount} gone at ${txn.merchant}. Your bank account felt that.`,
       },
       {
         t: "VibeWallet 😬",
-        b: `Spending detected: ₹${txn.amount} at ${txn.merchant}. Hope it was worth it bestie.`,
+        b: `Spending detected: ${symbol}${txn.amount} at ${txn.merchant}. Hope it was worth it bestie.`,
       },
       {
         t: "VibeWallet 🚨",
-        b: `₹${txn.amount} left the chat (to ${txn.merchant}). Pouring one out for your wallet.`,
+        b: `${symbol}${txn.amount} left the chat (to ${txn.merchant}). Pouring one out for your wallet.`,
       },
     ];
     const pick = msgs[Math.floor(Math.random() * msgs.length)];

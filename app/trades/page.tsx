@@ -32,6 +32,9 @@ export default function TradesPage() {
   const [investedInput, setInvestedInput] = useState("");
   const [currentInput, setCurrentInput] = useState("");
   const [saving, setSaving] = useState(false);
+  const [inHandCash, setInHandCash] = useState<string>("");
+  const [editingCash, setEditingCash] = useState(false);
+  const [cashInput, setCashInput] = useState("");
 
   const [isDark, setIsDark] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -62,6 +65,7 @@ export default function TradesPage() {
       .then((d) => {
         if (d.portfolioInvested != null) setInvested(String(d.portfolioInvested));
         if (d.portfolioCurrentValue != null) setCurrentValue(String(d.portfolioCurrentValue));
+        if (d.portfolioInHandCash != null) setInHandCash(String(d.portfolioInHandCash));
       });
   }, [status]);
 
@@ -88,6 +92,19 @@ export default function TradesPage() {
     });
     setCurrentValue(val);
     setEditingCurrent(false);
+    setSaving(false);
+  };
+
+  const saveCash = async () => {
+    const val = cashInput.trim();
+    setSaving(true);
+    await fetch("/api/budget", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ portfolioInHandCash: val ? Number(val) : null }),
+    });
+    setInHandCash(val);
+    setEditingCash(false);
     setSaving(false);
   };
 
@@ -252,6 +269,51 @@ export default function TradesPage() {
                 <div className={`text-xs mt-1 font-medium ${gain >= 0 ? "text-emerald-500" : "text-red-400"}`}>
                   {gain >= 0 ? "+" : ""}{fmt(gain)}{" "}
                   ({((gain / Number(invested)) * 100).toFixed(1)}%)
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          {/* In Hand Cash */}
+          <Card className="rounded-xl border-border/60 col-span-2">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-muted-foreground">💵 In Hand Cash (INDmoney wallet)</span>
+                <button
+                  onClick={() => { setCashInput(inHandCash); setEditingCash(true); }}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <Pencil className="w-3 h-3" />
+                </button>
+              </div>
+              {editingCash ? (
+                <div className="flex items-center gap-1.5 mt-1">
+                  <span className="text-sm text-muted-foreground">$</span>
+                  <input
+                    type="number"
+                    value={cashInput}
+                    onChange={(e) => setCashInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && saveCash()}
+                    className="flex-1 bg-transparent text-sm font-bold outline-none border-b border-border w-full"
+                    placeholder="0.00"
+                    autoFocus
+                  />
+                  <button
+                    onClick={saveCash}
+                    disabled={saving}
+                    className="text-emerald-500 hover:text-emerald-400 disabled:opacity-50"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <div
+                  className="text-xl font-bold tracking-tight cursor-pointer"
+                  onClick={() => { setCashInput(inHandCash); setEditingCash(true); }}
+                >
+                  {inHandCash
+                    ? `$${Number(inHandCash).toFixed(2)}`
+                    : <span className="text-muted-foreground text-sm">tap to set</span>
+                  }
                 </div>
               )}
             </CardContent>
