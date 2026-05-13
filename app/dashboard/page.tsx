@@ -512,6 +512,28 @@ useEffect(() => {
     doc.save(`vibewallet-${selectedMonth}.pdf`);
   };
 
+  const handleExportCSV = () => {
+    if (transactions.length === 0) return;
+    const headers = ["Date", "Merchant", "Amount", "Type", "Category", "Source", "VPA"];
+    const rows = transactions.map((t) => [
+      t.date,
+      `"${t.merchant.replace(/"/g, '""')}"`,
+      t.amount,
+      t.type,
+      `"${t.category_name.replace(/"/g, '""')}"`,
+      t.source,
+      t.vpa || "",
+    ]);
+    const csv = [headers, ...rows].map((r) => r.join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `vibewallet-${selectedMonth}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const saveBudget = async () => {
     const val = Number(budgetInput);
     if (!val || val <= 0) return;
@@ -921,6 +943,17 @@ useEffect(() => {
             >
               <span className="sm:hidden">⬇️</span>
               <span className="hidden sm:inline">⬇️ Export PDF</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleExportCSV}
+              disabled={transactions.length === 0}
+              className="gap-1.5 text-xs h-8 rounded-lg"
+              title="Export CSV"
+            >
+              <span className="sm:hidden">📊</span>
+              <span className="hidden sm:inline">📊 CSV</span>
             </Button>
             {/* Dark/light toggle — icon only on mobile */}
             <button
@@ -1866,6 +1899,16 @@ useEffect(() => {
               <Button variant="outline" className="flex-1 rounded-xl" onClick={() => setSplitTxn(null)}>Cancel</Button>
               <Button className="flex-1 rounded-xl" onClick={addSplit} disabled={!splitName || !splitAmount}>Add Split</Button>
             </div>
+            {splitName && splitAmount && (
+              <a
+                href={`https://wa.me/?text=${encodeURIComponent(`Hey ${splitName}! You owe me ₹${splitAmount} for ${splitTxn?.merchant}. Please pay when you can 🙏`)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-2 flex items-center justify-center gap-2 w-full py-2 rounded-xl border border-emerald-500/30 text-emerald-500 text-xs hover:bg-emerald-500/10 transition-colors"
+              >
+                <span>💬</span> Share on WhatsApp
+              </a>
+            )}
             {splitError && (
               <p className="text-xs text-red-500 mt-1 text-center">{splitError}</p>
             )}

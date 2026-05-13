@@ -59,23 +59,40 @@ function extractAmount(text: string): number {
 
 function extractDate(text: string, fallback: string): string {
   const patterns = [
+    // DD-MM-YY or DD-MM-YYYY or DD/MM/YY or DD/MM/YYYY
     /(\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})/,
-    /(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{2,4})/i,
+    // "7 May 2026" or "07 May 26"
+    /(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{2,4})/i,
+    // "May 7, 2026"
+    /((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{2,4})/i,
+    // "2026-05-07" ISO format
+    /(\d{4}-\d{2}-\d{2})/,
   ];
   for (const p of patterns) {
     const m = text.match(p);
     if (m) {
       try {
         const raw = m[1];
-        // Handle DD-MM-YY or DD-MM-YYYY (Indian bank format)
+
+        // ISO format — use directly
+        if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+          const d = new Date(raw);
+          if (!isNaN(d.getTime()) && d <= new Date()) return raw;
+        }
+
+        // DD-MM-YY or DD-MM-YYYY (Indian bank format)
         const ddmmMatch = raw.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})$/);
         if (ddmmMatch) {
-          let [, dd, mm, yy] = ddmmMatch;
+          const [, dd, mm, yy] = ddmmMatch;
           const yyyy = yy.length === 2 ? `20${yy}` : yy;
-          const d = new Date(`${yyyy}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}`);
+          // Validate: day 1-31, month 1-12
+          if (Number(dd) >= 1 && Number(dd) <= 31 && Number(mm) >= 1 && Number(mm) <= 12) {
+            const d = new Date(`${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`);
           if (!isNaN(d.getTime()) && d <= new Date()) return d.toISOString().split("T")[0];
+          }
         }
-        // Fallback for month-name formats
+
+        // Month-name formats — JS Date handles these well
         const d = new Date(raw);
         if (!isNaN(d.getTime()) && d <= new Date()) return d.toISOString().split("T")[0];
       } catch {}
